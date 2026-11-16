@@ -1,0 +1,20 @@
+# Managed by Copier — do not edit by hand.
+# Run `copier update` in this repo to pull template changes.
+_commit: 939debb
+_src_path: gh:smk762/argus-pkg-template
+author: smk762
+description: 'Shared detector servers for the Argus suite: NudeNet, EraX, watermark
+    and guard models behind one HTTP contract'
+dockerfile: Dockerfile
+github_owner: smk762
+has_cli: false
+has_server: false
+image_name: argus-retina
+package_name: argus_retina
+post_test: ''
+project_name: argus-retina
+python_min: '3.11'
+ruff_pin: 0.15.16
+test_extras: dev
+version_build_arg: false
+

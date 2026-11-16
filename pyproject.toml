@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "argus-retina"
+dynamic = ["version"]
+description = "Shared detector servers for the Argus suite: NudeNet, EraX, watermark and guard models behind one HTTP contract"
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.11"
+authors = [{ name = "smk762" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+dependencies = [
+    "structlog>=24.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff==0.15.16"]
+
+[project.urls]
+Repository = "https://github.com/smk762/argus-retina"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/argus_retina/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/argus_retina"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["src/argus_retina/_version.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501", "B008"]
