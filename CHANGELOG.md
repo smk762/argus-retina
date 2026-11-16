@@ -20,5 +20,10 @@ section here becomes its GitHub Release notes, and the release fails before push
 - **NudeNet's own 640m weights**, sha256 `04fe3d77…34eb`, fetched with `gh` (`make weights`) because GitHub serves
   release assets to anonymous clients as a login page. Cull used a third-party mirror: the same weights with the ONNX
   IR version lowered from 10 to 9.
-- `compose.yaml` runs both on loopback (`:8130`, `:8131`). CI builds both images on every PR; a `v*` tag pushes
+- **Watermark detector (argus-cortex#88), moved from argus-cull's `watermark/` sidecar:** `ghcr.io/smk762/argus-retina-watermark`, for
+  curator's `crops.detect`. The image has **no weights**. Mount them at `/models/watermark.pt`: fancyfeast's YOLO11x states no licence,
+  so it is never redistributed. `make watermark-weights` fetches it pinned by Space commit and sha256. mnemic's CC-BY-4.0 YOLOv8s
+  was tried in its place and caught 15 of 32 watermarked images against the YOLO11x's 28 at curator's 0.4 cutoff. Boxes are whole pixels
+  now, as EraX's are (cull's sidecar rounded them to 0.1).
+- `compose.yaml` runs all three on loopback (`:8130`, `:8131`, `:8132`). CI builds every image on every PR; a `v*` tag pushes
   them and creates the GitHub Release. Nothing goes to PyPI.

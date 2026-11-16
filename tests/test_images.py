@@ -1,4 +1,4 @@
-"""What each image declares: its tenant manifest, EraX's detections, and the Dockerfiles' pins."""
+"""What each image declares: its tenant manifest, the YOLO detections, and the Dockerfiles' pins."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from types import SimpleNamespace
 import pytest
 from argus_cortex.gpu_wire import load_tenant_manifest
 
-from argus_retina.erax import boxes
+from argus_retina.yolo import boxes
 
 ROOT = Path(__file__).parent.parent
-IMAGES = ["nudenet", "erax"]
+IMAGES = ["nudenet", "erax", "watermark"]
 NUDENET_640M_SHA256 = "04fe3d77980780c1f8297dc6d7f942fd5b3abe6942a188f742a85241e4f634eb"
 
 
@@ -45,6 +45,21 @@ def test_erax_weights_are_pinned_to_a_hub_commit_and_checksum():
     assert re.search(r"ERAX_SHA256=[0-9a-f]{64}", text)
 
 
+def test_the_watermark_image_bakes_in_no_weights():
+    # fancyfeast's YOLO11x has no stated licence: it is mounted at runtime, never redistributed (argus-cortex#88)
+    text = (ROOT / "images" / "watermark" / "Dockerfile").read_text()
+    steps = [line for line in text.splitlines() if line.startswith(("RUN", "COPY", "ADD", "    &&"))]
+    assert not any("curl" in s or "wget" in s or "weights" in s or ".pt" in s for s in steps)
+    assert "WATERMARK_MODEL=/models/watermark.pt" in text
+    assert "images/watermark/weights" in (ROOT / ".dockerignore").read_text()
+
+
+def test_the_watermark_weights_for_a_local_mount_are_pinned_to_a_space_commit_and_checksum():
+    make = (ROOT / "Makefile").read_text()
+    assert re.search(r"joycaption-watermark-detection/resolve/[0-9a-f]{40}/yolo11x-train28-best\.pt", make)
+    assert re.search(r"WATERMARK_SHA256 := [0-9a-f]{64}", make)
+
+
 class _T:
     """A tensor stand-in: indexable, with tolist()."""
 
@@ -58,7 +73,7 @@ class _T:
         return self.v
 
 
-def test_erax_detections_are_nudenet_shaped():
+def test_yolo_detections_are_nudenet_shaped():
     box = SimpleNamespace(xyxy=_T([[10.6, 20.2, 50.9, 80.0]]), cls=_T([2]), conf=_T([0.875]))
     results = [
         SimpleNamespace(names={2: "nipple"}, boxes=[box]),

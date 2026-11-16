@@ -1,0 +1,16 @@
+# argus-iris tenant manifest for argus-retina-watermark. Validated by argus-cortex's TenantManifest
+# (gpu-tenant-schema.json) in tests/test_images.py.
+#
+# The watermark detector runs CPU torch (CUDA_VISIBLE_DEVICES is empty): it never takes a lease or holds VRAM.
+# It keeps no GPU resident.
+tenant_version: "1.0"
+tenant: argus-retina-watermark
+description: Watermark detector (YOLO11x, weights mounted at runtime) on the CPU, for curator's crops.detect.
+repo: smk762/argus-retina
+kinds:
+  - kind: infer
+    vram_mb: 0
+    priority: interactive
+    preemptible: false
+    description: One /infer call (one or more images), on the CPU. About 1 s per image for the YOLO11x at 1024 px.
+residents: []

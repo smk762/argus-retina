@@ -144,7 +144,7 @@ def test_the_app_loads_its_model_at_startup():
         assert loaded.wait(5)
 
 
-@pytest.mark.parametrize("module", ["argus_retina.nudenet", "argus_retina.erax"])
+@pytest.mark.parametrize("module", ["argus_retina.nudenet", "argus_retina.erax", "argus_retina.watermark"])
 def test_the_image_modules_import_without_their_detector(module, monkeypatch, tmp_path):
     # nudenet / ultralytics are only in their images: importing the module must not need them
     import importlib

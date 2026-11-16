@@ -11,31 +11,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 from argus_retina.sidecar import Detect, Resident, configure_logging, create_app, decode_bgr
+from argus_retina.yolo import boxes
 
 MODEL = Path(os.environ.get("ERAX_MODEL", "/models/erax_nsfw_yolo11s.pt"))
 CONF = float(os.environ.get("ERAX_CONF", "0.2") or "0.2")
 IOU = float(os.environ.get("ERAX_IOU", "0.3") or "0.3")
-
-
-def boxes(results: Any) -> list[dict[str, Any]]:
-    """Ultralytics results as NudeNet-shaped detections: ``{"class", "score", "box": [x, y, w, h]}``."""
-    out: list[dict[str, Any]] = []
-    for result in results:
-        if result.boxes is None:
-            continue
-        for box in result.boxes:
-            x1, y1, x2, y2 = (float(v) for v in box.xyxy[0].tolist())
-            out.append(
-                {
-                    "class": result.names[int(box.cls[0])],
-                    "score": float(box.conf[0]),
-                    "box": [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
-                }
-            )
-    return out
 
 
 def load() -> Detect:
