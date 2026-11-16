@@ -8,15 +8,16 @@ The suite's **shared detector servers**: small, stateless model servers that tak
 
 Designed in [argus-cortex#88](https://github.com/smk762/argus-cortex/issues/88); its first job is [argus-cortex#79](https://github.com/smk762/argus-cortex/issues/79), one shared NudeNet 640m in place of the six copies across the suite.
 
-**Status: phase 1 in progress.** NudeNet 640m and EraX have moved here (no release yet). Watermark waits on its weights trial.
+**Status: phase 1 in progress.** NudeNet 640m, EraX and watermark have moved here (no release yet). The watermark image ships without weights (see the table below).
 
 ## Layout
 
 ```
 src/argus_retina/  sidecar      # the contract: Resident (background load, one inference at a time, /health), create_app
-                   nudenet erax # one module per model: load() imports the detector library lazily, so tests run without it
+                   nudenet erax watermark  # one module per model (yolo: the shared Ultralytics box conversion): load() imports the detector library lazily, so tests run without it
                    healthcheck  # `python -m argus_retina.healthcheck`: the images' HEALTHCHECK (healthy once loaded)
 images/<model>/    Dockerfile requirements.txt gpu-tenant.yaml   # build from the repo root; weights/ is fetched, gitignored
+                   # (images/watermark/weights/ is a runtime mount, dockerignored too: never in a build)
 ```
 
 - `make weights` fetches NudeNet's 640m release asset with `gh` (anonymous GitHub downloads get a login page) and checks its sha256; the pin is in the Makefile **and** the Dockerfile (a test keeps them equal). CI and the release run it with the workflow token.
@@ -69,7 +70,7 @@ Publishing to GHCR redistributes the weights inside each image. Pin every file b
 |---|---|---|
 | NudeNet 640m | NudeNet v3.4 release (cull currently fetches it from a third-party Hugging Face mirror) | AGPL, so OK to ship. Fetch from NudeNet's own release or a copy we pin; keep the sha256 `5fd488c3…5c9e`. |
 | EraX-NSFW-V1.0 (s) | Apache-2.0 | OK |
-| Watermark | **Trial `mnemic/watermarks_yolov8`** (CC-BY-4.0, commit `8e764d6`, sha256 `234f6ab0…4a49`; credit it) against fancyfeast's YOLO11x (no licence: **never bake it in**; mount it from a volume if it stays) | Decision pending the recall comparison on cortex#88 |
+| Watermark | fancyfeast's YOLO11x (Space commit `9bb8f6a`, sha256 `80b022e9…326e`; pinned in the Makefile for `make watermark-weights`) | **No licence: never bake it in.** Mounted at `/models/watermark.pt`; a test checks the Dockerfile fetches nothing. mnemic's CC-BY-4.0 YOLOv8s lost the trial (15/32 vs 28/32 at 0.4, cortex#88) |
 
 ## Commands
 

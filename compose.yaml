@@ -21,3 +21,16 @@ services:
     restart: unless-stopped
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${ERAX_PORT:-8131}:8080"
+
+  watermark:
+    # No weights in the image: `make watermark-weights` fetches fancyfeast's YOLO11x to the path mounted here
+    # (or point WATERMARK_WEIGHTS at your own copy).
+    image: ghcr.io/smk762/argus-retina-watermark:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/watermark/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ${WATERMARK_WEIGHTS:-./images/watermark/weights/watermark.pt}:/models/watermark.pt:ro
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${WATERMARK_PORT:-8132}:8080"

@@ -14,3 +14,5 @@ build
 .coverage
 htmlcov
 tests
+# Mounted at runtime, never sent to a build
+images/watermark/weights
