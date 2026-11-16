@@ -8,7 +8,7 @@ The suite's **shared detector servers**: small, stateless model servers that tak
 
 Designed in [argus-cortex#88](https://github.com/smk762/argus-cortex/issues/88); its first job is [argus-cortex#79](https://github.com/smk762/argus-cortex/issues/79), one shared NudeNet 640m in place of the six copies across the suite.
 
-**Status: phase 1 in progress.** NudeNet 640m, EraX and watermark have moved here (no release yet). The watermark image ships without weights (see the table below).
+**Status: phase 1 built; v0.1.0 is its first release.** NudeNet 640m, EraX and watermark have moved here, and OCR is new (#5); the callers' migrations (listed under Plan) are next. The watermark image ships without weights (see the table below).
 
 ## Layout
 
