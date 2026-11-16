@@ -22,7 +22,6 @@ images/<model>/    Dockerfile requirements.txt gpu-tenant.yaml   # build from th
 
 - `make weights` fetches NudeNet's 640m release asset with `gh` (anonymous GitHub downloads get a login page) and checks its sha256; the pin is in the Makefile **and** the Dockerfile (a test keeps them equal). CI and the release run it with the workflow token.
 - Images get `VERSION` and `COMMIT` as build args (`.git` is not in the context); `COMMIT` becomes `/health`'s `commit`.
-- The `dev` extra pins argus-cortex to a `dev` commit for `ResidentHealth` (not in 0.6). Move it to `argus-cortex[yaml]>=0.7` once that is released.
 
 ## Argus suite
 <!-- argus-suite: keep this block; argus-ci checks for it -->

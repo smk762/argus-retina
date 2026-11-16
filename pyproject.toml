@@ -40,15 +40,11 @@ dev = [
     "pyyaml>=6.0",
     "ruff==0.15.16",
     # Tests check /health against cortex's ResidentHealth and the manifests against TenantManifest.
-    # ResidentHealth is on cortex's dev, not yet released: pinned to that commit until cortex 0.7.
-    "argus-cortex[yaml] @ git+https://github.com/smk762/argus-cortex@0cee4d0412e62946ba8aa37f3cf8ed080e2bbc5f",
+    "argus-cortex[yaml]>=0.7",
 ]
 
 [project.urls]
 Repository = "https://github.com/smk762/argus-retina"
-
-[tool.hatch.metadata]
-allow-direct-references = true  # the dev extra's argus-cortex pin; nothing here is published to PyPI
 
 [tool.hatch.version]
 source = "vcs"
