@@ -12,7 +12,7 @@ from argus_cortex.gpu_wire import load_tenant_manifest
 from argus_retina.yolo import boxes
 
 ROOT = Path(__file__).parent.parent
-IMAGES = ["nudenet", "erax", "watermark"]
+IMAGES = ["nudenet", "erax", "watermark", "ocr"]
 NUDENET_640M_SHA256 = "04fe3d77980780c1f8297dc6d7f942fd5b3abe6942a188f742a85241e4f634eb"
 
 
@@ -58,6 +58,14 @@ def test_the_watermark_weights_for_a_local_mount_are_pinned_to_a_space_commit_an
     make = (ROOT / "Makefile").read_text()
     assert re.search(r"joycaption-watermark-detection/resolve/[0-9a-f]{40}/yolo11x-train28-best\.pt", make)
     assert re.search(r"WATERMARK_SHA256 := [0-9a-f]{64}", make)
+
+
+def test_ocr_models_are_pinned_to_a_release_and_checksums():
+    text = (ROOT / "images" / "ocr" / "Dockerfile").read_text()
+    assert "RapidOCR/resolve/v3.10.0/onnx" in text
+    for name in ("DET", "REC", "CLS"):
+        assert re.search(rf"OCR_{name}_SHA256=[0-9a-f]{{64}}", text)
+    assert "sha256sum -c -" in text
 
 
 class _T:

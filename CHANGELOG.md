@@ -25,5 +25,11 @@ section here becomes its GitHub Release notes, and the release fails before push
   so it is never redistributed. `make watermark-weights` fetches it pinned by Space commit and sha256. mnemic's CC-BY-4.0 YOLOv8s
   was tried in its place and caught 15 of 32 watermarked images against the YOLO11x's 28 at curator's 0.4 cutoff. Boxes are whole pixels
   now, as EraX's are (cull's sidecar rounded them to 0.1).
-- `compose.yaml` runs all three on loopback (`:8130`, `:8131`, `:8132`). CI builds every image on every PR; a `v*` tag pushes
+- **OCR (#5): `ghcr.io/smk762/argus-retina-ocr`**, RapidOCR with PaddleOCR's PP-OCRv6 small (Apache-2.0, ONNX on the CPU),
+  for checking the text a caption claims to read (argus-lens reconcile). `/infer` answers one detection per line of
+  text, `{"class": "text", "score", "box", "text"}`, in reading order. The three models are pinned to RapidOCR's v3.10.0
+  release by sha256 and never downloaded at runtime. Chosen over docTR, EasyOCR and Florence-2: on 31 photos with
+  hand-checked text it found 48 of 69 phrases at about 0.4 s per image, and unlike Florence-2 it never wrote text
+  that isn't there.
+- `compose.yaml` runs all four on loopback (`:8130` to `:8133`). CI builds every image on every PR; a `v*` tag pushes
   them and creates the GitHub Release. Nothing goes to PyPI.

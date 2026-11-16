@@ -144,13 +144,15 @@ def test_the_app_loads_its_model_at_startup():
         assert loaded.wait(5)
 
 
-@pytest.mark.parametrize("module", ["argus_retina.nudenet", "argus_retina.erax", "argus_retina.watermark"])
+@pytest.mark.parametrize(
+    "module", ["argus_retina.nudenet", "argus_retina.erax", "argus_retina.watermark", "argus_retina.ocr"]
+)
 def test_the_image_modules_import_without_their_detector(module, monkeypatch, tmp_path):
     # nudenet / ultralytics are only in their images: importing the module must not need them
     import importlib
 
     mod = importlib.import_module(module)
     assert mod.resident.state == "unloaded"
-    monkeypatch.setattr(mod, "MODEL", tmp_path / "missing.onnx")
+    monkeypatch.setattr(mod, "DET" if module.endswith(".ocr") else "MODEL", tmp_path / "missing.onnx")
     with pytest.raises(FileNotFoundError):
         mod.load()

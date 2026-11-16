@@ -1,0 +1,16 @@
+# argus-iris tenant manifest for argus-retina-ocr. Validated by argus-cortex's TenantManifest
+# (gpu-tenant-schema.json) in tests/test_images.py.
+#
+# RapidOCR runs ONNX Runtime on the CPU (CUDA_VISIBLE_DEVICES is empty): it never takes a lease or holds VRAM.
+# It keeps no GPU resident.
+tenant_version: "1.0"
+tenant: argus-retina-ocr
+description: RapidOCR (PP-OCRv6 small) text reader on the CPU, for checking text a caption claims to read.
+repo: smk762/argus-retina
+kinds:
+  - kind: infer
+    vram_mb: 0
+    priority: interactive
+    preemptible: false
+    description: One /infer call (one or more images), on the CPU. About 0.5 s per 1024 px image.
+residents: []
