@@ -34,3 +34,12 @@ services:
       - ${WATERMARK_WEIGHTS:-./images/watermark/weights/watermark.pt}:/models/watermark.pt:ro
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${WATERMARK_PORT:-8132}:8080"
+
+  ocr:
+    image: ghcr.io/smk762/argus-retina-ocr:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/ocr/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${OCR_PORT:-8133}:8080"

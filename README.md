@@ -11,13 +11,20 @@ Part of the [Argus suite](https://github.com/smk762/argus-cortex/blob/dev/SUITE.
 | `ghcr.io/smk762/argus-retina-nudenet` | [NudeNet](https://github.com/notAI-tech/NudeNet) **640m** (v3.4 weights) at 640 px | AGPL-3.0 (NudeNet) | CPU (ONNX) |
 | `ghcr.io/smk762/argus-retina-erax` | [EraX-NSFW V1.0](https://huggingface.co/erax-ai/EraX-NSFW-V1.0) small (YOLO11s) | Apache-2.0 | CPU (torch) |
 | `ghcr.io/smk762/argus-retina-watermark` | Watermark detector, **no weights in the image**: mount fancyfeast's [YOLO11x](https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection) | none stated, so never redistributed | CPU (torch) |
+| `ghcr.io/smk762/argus-retina-ocr` | [RapidOCR](https://github.com/RapidAI/RapidOCR) with PaddleOCR's **PP-OCRv6 small** (multilingual Latin and CJK): text lines with boxes | Apache-2.0 | CPU (ONNX) |
 
 All listen on port 8080, run as a non-root user, never claim a GPU (`CUDA_VISIBLE_DEVICES` is empty), and are healthy once their model has loaded.
 
 ```bash
 make watermark-weights        # the YOLO11x the watermark service mounts (pinned by Space commit and sha256)
-docker compose up -d          # on 127.0.0.1:8130 (nudenet), :8131 (erax) and :8132 (watermark)
+docker compose up -d          # on 127.0.0.1:8130 (nudenet), :8131 (erax), :8132 (watermark) and :8133 (ocr)
 ```
+
+### OCR: what the image says
+
+The OCR image reads the text in an image so a caller can check what a caption claims it reads (argus-lens reconcile, [#5](https://github.com/smk762/argus-retina/issues/5)). It returns one detection per line of text, with the line in `text`, in reading order: rows top to bottom, then left to right. It reads rows, not columns, so two facing pages interleave. `score` is the recogniser's confidence; a line it can barely read (ornate script, Fraktur) has a low score rather than a cleaned-up guess. It reads what is printed, misspellings included. Words are sometimes run together (`afProfessor`), so a name check should compare without spaces.
+
+It was chosen over docTR, EasyOCR and Florence-2 on 31 photos with hand-checked text (historical documents and plates, street signs). RapidOCR found 48 of 69 phrases at about 0.4 s per image on the CPU. Florence-2 large found 51 but took 8 s, and it wrote plausible text that isn't in the image ("Hosibolt Maria Espinosa" for Josep Maria Espinàs), which is what a text check exists to catch.
 
 ### Watermark: bring your own weights
 
@@ -33,7 +40,7 @@ The 640m file is NudeNet's own release asset (sha256 `04fe3d77…34eb`). GitHub 
 
 ## The contract
 
-- `POST /infer`: multipart image fields `f1`, `f2`, …, answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, one list per image in field order. This is NudeNet's shape; EraX answers in it with its own classes (`anus`, `make_love`, `nipple`, `penis`, `vagina`), and the watermark detector with `watermark`. `400` without images, `422` for a file that isn't an image, `503` while the model loads.
+- `POST /infer`: multipart image fields `f1`, `f2`, …, answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, one list per image in field order. This is NudeNet's shape; EraX answers in it with its own classes (`anus`, `make_love`, `nipple`, `penis`, `vagina`), and the watermark detector with `watermark`. The OCR image answers with `text`, and each of its detections adds the line it read as a `text` field. `400` without images, `422` for a file that isn't an image, `503` while the model loads.
 - `GET /health`: argus-cortex's `ResidentHealth` (`model_state`: `loading`, `cpu` or `error`; `busy`; `idle_s`), plus `detector`, `model` (the weights file) and the model's settings (`resolution` for NudeNet, `conf`/`iou` for EraX, `conf`/`iou`/`imgsz` for watermark), and `version` and `commit`: the source the image was built from.
 
 Images decode every frame the same way (three-channel BGR, stored pixel order, no EXIF rotation), so boxes from different detectors compare.
@@ -50,7 +57,7 @@ nn.info().detector          # "640m"
 nn.check(image_bytes)       # detections, labels, exposed_score
 ```
 
-Settings, all optional: `NUDENET_RESOLUTION` (640), `ERAX_CONF` (0.2), `ERAX_IOU` (0.3), `WATERMARK_CONF` (0.2, a reporting floor below curator's own `min_conf`), `WATERMARK_IOU` (0.5), `WATERMARK_IMGSZ` (1024).
+Settings, all optional: `NUDENET_RESOLUTION` (640), `ERAX_CONF` (0.2), `ERAX_IOU` (0.3), `WATERMARK_CONF` (0.2, a reporting floor below curator's own `min_conf`), `WATERMARK_IOU` (0.5), `WATERMARK_IMGSZ` (1024), `OCR_MIN_SCORE` (0.5: lines read with less confidence are dropped).
 
 ## Licence
 
@@ -67,6 +74,6 @@ make lint
 make images    # fetch the baked-in weights and build the images locally (IMAGES=nudenet for one)
 ```
 
-Each model is a module (`argus_retina.nudenet`, `argus_retina.erax`, `argus_retina.watermark`) on the shared server in `argus_retina.sidecar`, with its Dockerfile, extra requirements and argus-iris `gpu-tenant.yaml` in `images/<model>/`. A release (`v*` tag) builds and pushes one image per model; nothing goes to PyPI.
+Each model is a module (`argus_retina.nudenet`, `argus_retina.erax`, `argus_retina.watermark`, `argus_retina.ocr`) on the shared server in `argus_retina.sidecar`, with its Dockerfile, extra requirements and argus-iris `gpu-tenant.yaml` in `images/<model>/`. A release (`v*` tag) builds and pushes one image per model; nothing goes to PyPI.
 
 Versions come from git tags (`hatch-vcs`). Scaffolded from [`argus-pkg-template`](https://github.com/smk762/argus-pkg-template); run `copier update` to pull tooling changes, but keep the AGPL `LICENSE`, the licence fields in `pyproject.toml` and this repo's image workflows.

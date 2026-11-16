@@ -14,7 +14,7 @@ Designed in [argus-cortex#88](https://github.com/smk762/argus-cortex/issues/88);
 
 ```
 src/argus_retina/  sidecar      # the contract: Resident (background load, one inference at a time, /health), create_app
-                   nudenet erax watermark  # one module per model (yolo: the shared Ultralytics box conversion): load() imports the detector library lazily, so tests run without it
+                   nudenet erax watermark ocr  # one module per model (yolo: the shared Ultralytics box conversion): load() imports the detector library lazily, so tests run without it
                    healthcheck  # `python -m argus_retina.healthcheck`: the images' HEALTHCHECK (healthy once loaded)
 images/<model>/    Dockerfile requirements.txt gpu-tenant.yaml   # build from the repo root; weights/ is fetched, gitignored
                    # (images/watermark/weights/ is a runtime mount, dockerignored too: never in a build)
@@ -56,7 +56,7 @@ In: stateless perception models with no policy. Out:
 
 ## The contract every image serves
 
-- `POST /infer`: multipart image fields `f1`, `f2`... answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, in field order. This is NudeNet's shape, already shared by cull's sidecars and parsed by `argus_cortex.moderation`.
+- `POST /infer`: multipart image fields `f1`, `f2`... answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, in field order. This is NudeNet's shape, already shared by cull's sidecars and parsed by `argus_cortex.moderation`. The OCR image adds a `text` field to each detection (`class` is `"text"`); keep new fields additive like that.
 - `GET /health`: `argus_cortex.gpu_wire.ResidentHealth` (`model_state`, `busy`, `idle_s`, optional `gpu`), plus `model` and `resolution` (read by `NudeNetClient.info()`) and the source commit.
 - `/admin/unload|evict|wake` (`ResidentActionReply`; 409 `ResidentBusyReply`) only on images that hold VRAM.
 - A `gpu-tenant.yaml` per image declaring its footprint. Placement is by VRAM across 2–3 headless GPU workers, and argus-iris does the placing.
@@ -69,6 +69,7 @@ Publishing to GHCR redistributes the weights inside each image. Pin every file b
 |---|---|---|
 | NudeNet 640m | NudeNet v3.4 release (cull currently fetches it from a third-party Hugging Face mirror) | AGPL, so OK to ship. Fetch from NudeNet's own release or a copy we pin; keep the sha256 `5fd488c3…5c9e`. |
 | EraX-NSFW-V1.0 (s) | Apache-2.0 | OK |
+| OCR | PP-OCRv6 small det/rec + PP-OCRv4 direction classifier, RapidOCR's v3.10.0 ONNX exports from ModelScope (Apache-2.0, PaddleOCR) | OK; pinned by release URL and sha256 in the Dockerfile |
 | Watermark | fancyfeast's YOLO11x (Space commit `9bb8f6a`, sha256 `80b022e9…326e`; pinned in the Makefile for `make watermark-weights`) | **No licence: never bake it in.** Mounted at `/models/watermark.pt`; a test checks the Dockerfile fetches nothing. mnemic's CC-BY-4.0 YOLOv8s lost the trial (15/32 vs 28/32 at 0.4, cortex#88) |
 
 ## Commands

@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [nudenet, erax, watermark]
+        image: [nudenet, erax, watermark, ocr]
     steps:
       - uses: actions/checkout@v4
       - name: Fetch weights

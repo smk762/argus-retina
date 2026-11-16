@@ -1,0 +1,3 @@
+# The reader: RapidOCR (Apache-2.0) on ONNX Runtime. The models are fetched by the Dockerfile, pinned.
+rapidocr==3.10.0
+onnxruntime==1.32.0
