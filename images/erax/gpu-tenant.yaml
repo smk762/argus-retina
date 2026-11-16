@@ -1,0 +1,15 @@
+# argus-iris tenant manifest for argus-retina-erax. Validated by argus-cortex's TenantManifest
+# (gpu-tenant-schema.json) in tests/test_images.py.
+#
+# EraX runs CPU torch (CUDA_VISIBLE_DEVICES is empty): it never takes a lease or holds VRAM. It keeps no GPU resident.
+tenant_version: "1.0"
+tenant: argus-retina-erax
+description: EraX-NSFW V1.0 (YOLO11s) nudity detector on the CPU, shared by the suite's stages over HTTP.
+repo: smk762/argus-retina
+kinds:
+  - kind: infer
+    vram_mb: 0
+    priority: interactive
+    preemptible: false
+    description: One /infer call (one or more images), on the CPU.
+residents: []

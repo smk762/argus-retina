@@ -1,0 +1,23 @@
+# argus-retina's detectors, published on loopback only. To serve the LAN, set RETINA_BIND=0.0.0.0 in .env
+# (the servers have no auth: keep them on a trusted network).
+#   docker compose up -d                      # the released images
+#   docker compose build && docker compose up -d   # from source, after `make weights`
+
+services:
+  nudenet:
+    image: ghcr.io/smk762/argus-retina-nudenet:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/nudenet/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${NUDENET_PORT:-8130}:8080"
+
+  erax:
+    image: ghcr.io/smk762/argus-retina-erax:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/erax/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${ERAX_PORT:-8131}:8080"

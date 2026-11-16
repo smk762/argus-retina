@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -17,3 +17,27 @@ jobs:
       ruff-version: "0.15.16"
       test-extras: "dev"
 
+  images:
+    # Every image still builds (weights fetched and checked, server installed); nothing is pushed.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [nudenet, erax]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch weights
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make weights
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/${{ matrix.image }}/Dockerfile
+          push: false
+          build-args: |
+            VERSION=0.0.0+ci
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

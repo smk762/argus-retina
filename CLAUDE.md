@@ -8,7 +8,20 @@ The suite's **shared detector servers**: small, stateless model servers that tak
 
 Designed in [argus-cortex#88](https://github.com/smk762/argus-cortex/issues/88); its first job is [argus-cortex#79](https://github.com/smk762/argus-cortex/issues/79), one shared NudeNet 640m in place of the six copies across the suite.
 
-**Status: scaffold only.** No server has moved here yet. Start with phase 1 below.
+**Status: phase 1 in progress.** NudeNet 640m and EraX have moved here (no release yet). Watermark waits on its weights trial.
+
+## Layout
+
+```
+src/argus_retina/  sidecar      # the contract: Resident (background load, one inference at a time, /health), create_app
+                   nudenet erax # one module per model: load() imports the detector library lazily, so tests run without it
+                   healthcheck  # `python -m argus_retina.healthcheck`: the images' HEALTHCHECK (healthy once loaded)
+images/<model>/    Dockerfile requirements.txt gpu-tenant.yaml   # build from the repo root; weights/ is fetched, gitignored
+```
+
+- `make weights` fetches NudeNet's 640m release asset with `gh` (anonymous GitHub downloads get a login page) and checks its sha256; the pin is in the Makefile **and** the Dockerfile (a test keeps them equal). CI and the release run it with the workflow token.
+- Images get `VERSION` and `COMMIT` as build args (`.git` is not in the context); `COMMIT` becomes `/health`'s `commit`.
+- The `dev` extra pins argus-cortex to a `dev` commit for `ResidentHealth` (not in 0.6). Move it to `argus-cortex[yaml]>=0.7` once that is released.
 
 ## Argus suite
 <!-- argus-suite: keep this block; argus-ci checks for it -->
@@ -76,4 +89,4 @@ make format    # ruff format + --fix
 
 ## CI / release
 
-CI runs via the shared [`argus-ci`](https://github.com/smk762/argus-ci) reusable workflow. The template's release publishes PyPI + one GHCR image on `v*` tags; phase 1 changes it to one image per model (and decides whether the shared base goes to PyPI at all; nothing outside this repo should import it). Scaffolded from [`argus-pkg-template`](https://github.com/smk762/argus-pkg-template).
+CI runs via the shared [`argus-ci`](https://github.com/smk762/argus-ci) reusable workflow. CI also builds every image (no push) on each PR. A `v*` tag pushes one image per model (`ghcr.io/smk762/argus-retina-<model>`) and then creates the GitHub Release from the tag's CHANGELOG section; it fails before pushing if that section is missing. **Nothing goes to PyPI**: nothing outside this repo should import it. `copier update` would bring back the template's PyPI release and single root Dockerfile: reject those hunks too. Scaffolded from [`argus-pkg-template`](https://github.com/smk762/argus-pkg-template).

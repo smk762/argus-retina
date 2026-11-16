@@ -24,10 +24,31 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff==0.15.16"]
+# What every image's server needs; each image adds its own detector (images/<model>/requirements.txt).
+server = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "python-multipart>=0.0.9",
+    "opencv-python-headless>=4.10",
+    "numpy>=1.26",
+]
+dev = [
+    "argus-retina[server]",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "ruff==0.15.16",
+    # Tests check /health against cortex's ResidentHealth and the manifests against TenantManifest.
+    # ResidentHealth is on cortex's dev, not yet released: pinned to that commit until cortex 0.7.
+    "argus-cortex[yaml] @ git+https://github.com/smk762/argus-cortex@0cee4d0412e62946ba8aa37f3cf8ed080e2bbc5f",
+]
 
 [project.urls]
 Repository = "https://github.com/smk762/argus-retina"
+
+[tool.hatch.metadata]
+allow-direct-references = true  # the dev extra's argus-cortex pin; nothing here is published to PyPI
 
 [tool.hatch.version]
 source = "vcs"

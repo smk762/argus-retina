@@ -1,0 +1,16 @@
+# argus-iris tenant manifest for argus-retina-nudenet. Validated by argus-cortex's TenantManifest
+# (gpu-tenant-schema.json) in tests/test_images.py.
+#
+# NudeNet runs ONNX on the CPU (CUDA_VISIBLE_DEVICES is empty): it never takes a lease or holds VRAM. The manifest
+# says so, so the broker can see the service and doesn't wait on it. It keeps no GPU resident.
+tenant_version: "1.0"
+tenant: argus-retina-nudenet
+description: NudeNet 640m nudity detector (CPU ONNX), shared by the suite's stages over HTTP.
+repo: smk762/argus-retina
+kinds:
+  - kind: infer
+    vram_mb: 0
+    priority: interactive
+    preemptible: false
+    description: One /infer call (one or more images), on the CPU.
+residents: []
