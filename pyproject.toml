@@ -24,7 +24,24 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff==0.15.16"]
+# What every image's server needs; each image adds its own detector (images/<model>/requirements.txt).
+server = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "python-multipart>=0.0.9",
+    "opencv-python-headless>=4.10",
+    "numpy>=1.26",
+]
+dev = [
+    "argus-retina[server]",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "ruff==0.15.16",
+    # Tests check /health against cortex's ResidentHealth and the manifests against TenantManifest.
+    "argus-cortex[yaml]>=0.7",
+]
 
 [project.urls]
 Repository = "https://github.com/smk762/argus-retina"

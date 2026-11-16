@@ -1,5 +1,5 @@
-# NOTE: .git is deliberately *not* ignored -- hatch-vcs reads the version from
-# git history at build time. Set `version_build_arg` if you want it excluded.
+# Images build from the repo root with VERSION and COMMIT build args, so .git stays out.
+.git
 .github
 .venv
 venv
@@ -13,3 +13,6 @@ build
 .mypy_cache
 .coverage
 htmlcov
+tests
+# Mounted at runtime, never sent to a build
+images/watermark/weights

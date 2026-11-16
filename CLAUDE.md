@@ -8,7 +8,20 @@ The suite's **shared detector servers**: small, stateless model servers that tak
 
 Designed in [argus-cortex#88](https://github.com/smk762/argus-cortex/issues/88); its first job is [argus-cortex#79](https://github.com/smk762/argus-cortex/issues/79), one shared NudeNet 640m in place of the six copies across the suite.
 
-**Status: scaffold only.** No server has moved here yet. Start with phase 1 below.
+**Status: phase 1 built; v0.1.0 is its first release.** NudeNet 640m, EraX and watermark have moved here, and OCR is new (#5); the callers' migrations (listed under Plan) are next. The watermark image ships without weights (see the table below).
+
+## Layout
+
+```
+src/argus_retina/  sidecar      # the contract: Resident (background load, one inference at a time, /health), create_app
+                   nudenet erax watermark ocr  # one module per model (yolo: the shared Ultralytics box conversion): load() imports the detector library lazily, so tests run without it
+                   healthcheck  # `python -m argus_retina.healthcheck`: the images' HEALTHCHECK (healthy once loaded)
+images/<model>/    Dockerfile requirements.txt gpu-tenant.yaml   # build from the repo root; weights/ is fetched, gitignored
+                   # (images/watermark/weights/ is a runtime mount, dockerignored too: never in a build)
+```
+
+- `make weights` fetches NudeNet's 640m release asset with `gh` (anonymous GitHub downloads get a login page) and checks its sha256; the pin is in the Makefile **and** the Dockerfile (a test keeps them equal). CI and the release run it with the workflow token.
+- Images get `VERSION` and `COMMIT` as build args (`.git` is not in the context); `COMMIT` becomes `/health`'s `commit`.
 
 ## Argus suite
 <!-- argus-suite: keep this block; argus-ci checks for it -->
@@ -43,7 +56,7 @@ In: stateless perception models with no policy. Out:
 
 ## The contract every image serves
 
-- `POST /infer`: multipart image fields `f1`, `f2`... answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, in field order. This is NudeNet's shape, already shared by cull's sidecars and parsed by `argus_cortex.moderation`.
+- `POST /infer`: multipart image fields `f1`, `f2`... answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, in field order. This is NudeNet's shape, already shared by cull's sidecars and parsed by `argus_cortex.moderation`. The OCR image adds a `text` field to each detection (`class` is `"text"`); keep new fields additive like that.
 - `GET /health`: `argus_cortex.gpu_wire.ResidentHealth` (`model_state`, `busy`, `idle_s`, optional `gpu`), plus `model` and `resolution` (read by `NudeNetClient.info()`) and the source commit.
 - `/admin/unload|evict|wake` (`ResidentActionReply`; 409 `ResidentBusyReply`) only on images that hold VRAM.
 - A `gpu-tenant.yaml` per image declaring its footprint. Placement is by VRAM across 2–3 headless GPU workers, and argus-iris does the placing.
@@ -54,9 +67,10 @@ Publishing to GHCR redistributes the weights inside each image. Pin every file b
 
 | Model | Weights | Status |
 |---|---|---|
-| NudeNet 640m | NudeNet v3.4 release (cull currently fetches it from a third-party Hugging Face mirror) | AGPL, so OK to ship. Fetch from NudeNet's own release or a copy we pin; keep the sha256 `5fd488c3…5c9e`. |
+| NudeNet 640m | NudeNet v3.4 release (cull currently fetches it from a third-party Hugging Face mirror) | AGPL, so OK to ship. Fetch from NudeNet's own release or a copy we pin; pinned at sha256 `04fe3d77…34eb` (the mirror's `5fd488c3…5c9e` is the same weights with the ONNX IR version lowered). |
 | EraX-NSFW-V1.0 (s) | Apache-2.0 | OK |
-| Watermark | **Trial `mnemic/watermarks_yolov8`** (CC-BY-4.0, commit `8e764d6`, sha256 `234f6ab0…4a49`; credit it) against fancyfeast's YOLO11x (no licence: **never bake it in**; mount it from a volume if it stays) | Decision pending the recall comparison on cortex#88 |
+| OCR | PP-OCRv6 small det/rec + PP-OCRv4 direction classifier, RapidOCR's v3.10.0 ONNX exports from ModelScope (Apache-2.0, PaddleOCR) | OK; pinned by release URL and sha256 in the Dockerfile |
+| Watermark | fancyfeast's YOLO11x (Space commit `9bb8f6a`, sha256 `80b022e9…326e`; pinned in the Makefile for `make watermark-weights`) | **No licence: never bake it in.** Mounted at `/models/watermark.pt`; a test checks the Dockerfile fetches nothing. mnemic's CC-BY-4.0 YOLOv8s lost the trial (15/32 vs 28/32 at 0.4, cortex#88) |
 
 ## Commands
 
@@ -76,4 +90,4 @@ make format    # ruff format + --fix
 
 ## CI / release
 
-CI runs via the shared [`argus-ci`](https://github.com/smk762/argus-ci) reusable workflow. The template's release publishes PyPI + one GHCR image on `v*` tags; phase 1 changes it to one image per model (and decides whether the shared base goes to PyPI at all; nothing outside this repo should import it). Scaffolded from [`argus-pkg-template`](https://github.com/smk762/argus-pkg-template).
+CI runs via the shared [`argus-ci`](https://github.com/smk762/argus-ci) reusable workflow. CI also builds every image (no push) on each PR. A `v*` tag pushes one image per model (`ghcr.io/smk762/argus-retina-<model>`) and then creates the GitHub Release from the tag's CHANGELOG section; it fails before pushing if that section is missing. **Nothing goes to PyPI**: nothing outside this repo should import it. `copier update` would bring back the template's PyPI release and single root Dockerfile: reject those hunks too. Scaffolded from [`argus-pkg-template`](https://github.com/smk762/argus-pkg-template).

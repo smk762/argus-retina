@@ -1,0 +1,2 @@
+# The detector. Its wheel bundles only 320n; the image adds the 640m weights.
+nudenet==3.4.2

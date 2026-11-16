@@ -1,0 +1,2 @@
+# The detector (torch and torchvision come from the CPU index first; see the Dockerfile).
+ultralytics==8.4.181
