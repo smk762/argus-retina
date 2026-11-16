@@ -47,6 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Fetch weights
+        if: matrix.image == 'nudenet'  # the only image that bakes in a release asset
         # NudeNet's release assets need an authenticated download; the Makefile checks the sha256.
         env:
           GH_TOKEN: ${{ github.token }}

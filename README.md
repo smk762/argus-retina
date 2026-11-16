@@ -41,7 +41,7 @@ The 640m file is NudeNet's own release asset (sha256 `04fe3d77…34eb`). GitHub 
 ## The contract
 
 - `POST /infer`: multipart image fields `f1`, `f2`, …, answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, one list per image in field order. This is NudeNet's shape; EraX answers in it with its own classes (`anus`, `make_love`, `nipple`, `penis`, `vagina`), and the watermark detector with `watermark`. The OCR image answers with `text`, and each of its detections adds the line it read as a `text` field. `400` without images, `422` for a file that isn't an image, `503` while the model loads.
-- `GET /health`: argus-cortex's `ResidentHealth` (`model_state`: `loading`, `cpu` or `error`; `busy`; `idle_s`), plus `detector`, `model` (the weights file) and the model's settings (`resolution` for NudeNet, `conf`/`iou` for EraX, `conf`/`iou`/`imgsz` for watermark), and `version` and `commit`: the source the image was built from.
+- `GET /health`: argus-cortex's `ResidentHealth` (`model_state`: `loading`, `cpu` or `error`; `busy`; `idle_s`), plus `detector`, `model` (the weights file) and the model's settings (`resolution` for NudeNet, `conf`/`iou` for EraX, `conf`/`iou`/`imgsz` for watermark, `det`/`rec`/`min_score` for OCR), and `version` and `commit`: the source the image was built from.
 
 Images decode every frame the same way (three-channel BGR, stored pixel order, no EXIF rotation), so boxes from different detectors compare.
 

@@ -61,10 +61,12 @@ def test_infer_refuses_no_images_and_unreadable_ones():
     assert bad.status_code == 422
 
 
-def test_a_detector_failure_is_a_500():
+@pytest.mark.parametrize("exc", [RuntimeError, ValueError])
+def test_a_detector_failure_is_a_500(exc):
+    # A ValueError inside the model is the server's fault too: only an unreadable image is a 422.
     def load():
         def detect_all(images):
-            raise RuntimeError("onnx exploded")
+            raise exc("onnx exploded")
 
         return detect_all
 

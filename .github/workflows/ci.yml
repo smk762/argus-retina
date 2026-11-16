@@ -27,6 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Fetch weights
+        if: matrix.image == 'nudenet'  # the only image that bakes in a release asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: make weights

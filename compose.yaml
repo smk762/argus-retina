@@ -31,7 +31,14 @@ services:
       dockerfile: images/watermark/Dockerfile
     restart: unless-stopped
     volumes:
-      - ${WATERMARK_WEIGHTS:-./images/watermark/weights/watermark.pt}:/models/watermark.pt:ro
+      # Long form so a missing file is an error: the short form would create a root-owned directory at that path,
+      # which then blocks `make watermark-weights`.
+      - type: bind
+        source: ${WATERMARK_WEIGHTS:-./images/watermark/weights/watermark.pt}
+        target: /models/watermark.pt
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${WATERMARK_PORT:-8132}:8080"
 

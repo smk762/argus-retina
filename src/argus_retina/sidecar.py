@@ -29,7 +29,7 @@ from fastapi.concurrency import run_in_threadpool
 
 import argus_retina
 
-__all__ = ["Detect", "Loader", "Resident", "create_app", "decode_bgr", "form_images"]
+__all__ = ["Detect", "Loader", "Resident", "UnreadableImage", "create_app", "decode_bgr", "form_images"]
 
 Detect = Callable[[list[bytes]], list[list[dict[str, Any]]]]
 Loader = Callable[[], Detect]
@@ -37,6 +37,10 @@ State = Literal["unloaded", "loading", "cpu", "gpu", "error"]
 
 # The source commit, for /health (AGPL section 13). The image's Dockerfile sets it from the build.
 COMMIT_ENV = "ARGUS_RETINA_COMMIT"
+
+
+class UnreadableImage(ValueError):
+    """A part that doesn't decode as an image: the caller's fault (422), unlike a ValueError inside a model."""
 
 
 async def form_images(form: Any) -> list[bytes]:
@@ -59,7 +63,7 @@ def decode_bgr(data: bytes) -> Any:
 
     mat = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
     if mat is None:
-        raise ValueError("unreadable image")
+        raise UnreadableImage("unreadable image")
     return mat
 
 
@@ -140,20 +144,22 @@ def create_app(resident: Resident, *, load: bool = True) -> FastAPI:
 
     app = FastAPI(title=f"argus-retina {resident.name}", version=argus_retina.__version__, lifespan=lifespan)
 
+    # async: answered on the event loop, so /infer calls queued on the threadpool can't starve the HEALTHCHECK.
     @app.get("/health")
-    def health() -> dict[str, Any]:
+    async def health() -> dict[str, Any]:
         return resident.health()
 
     @app.post("/infer")
     async def infer(request: Request) -> dict[str, Any]:
-        if resident.state != "cpu" and resident.state != "gpu":
+        if resident.state not in ("cpu", "gpu"):
             raise HTTPException(status_code=503, detail=f"{resident.name} is {resident.state}")
-        images = await form_images(await request.form())
+        async with request.form() as form:  # closes the spooled upload files
+            images = await form_images(form)
         if not images:
             raise HTTPException(status_code=400, detail="expected multipart image fields (f1, ...)")
         try:
             prediction = await run_in_threadpool(resident.detect, images)
-        except ValueError as exc:  # decode_bgr: not an image
+        except UnreadableImage as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
             resident.log.exception("%s detect failed", resident.name)

@@ -67,7 +67,7 @@ Publishing to GHCR redistributes the weights inside each image. Pin every file b
 
 | Model | Weights | Status |
 |---|---|---|
-| NudeNet 640m | NudeNet v3.4 release (cull currently fetches it from a third-party Hugging Face mirror) | AGPL, so OK to ship. Fetch from NudeNet's own release or a copy we pin; keep the sha256 `5fd488c3…5c9e`. |
+| NudeNet 640m | NudeNet v3.4 release (cull currently fetches it from a third-party Hugging Face mirror) | AGPL, so OK to ship. Fetch from NudeNet's own release or a copy we pin; pinned at sha256 `04fe3d77…34eb` (the mirror's `5fd488c3…5c9e` is the same weights with the ONNX IR version lowered). |
 | EraX-NSFW-V1.0 (s) | Apache-2.0 | OK |
 | OCR | PP-OCRv6 small det/rec + PP-OCRv4 direction classifier, RapidOCR's v3.10.0 ONNX exports from ModelScope (Apache-2.0, PaddleOCR) | OK; pinned by release URL and sha256 in the Dockerfile |
 | Watermark | fancyfeast's YOLO11x (Space commit `9bb8f6a`, sha256 `80b022e9…326e`; pinned in the Makefile for `make watermark-weights`) | **No licence: never bake it in.** Mounted at `/models/watermark.pt`; a test checks the Dockerfile fetches nothing. mnemic's CC-BY-4.0 YOLOv8s lost the trial (15/32 vs 28/32 at 0.4, cortex#88) |
