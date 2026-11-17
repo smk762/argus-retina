@@ -38,6 +38,15 @@ State = Literal["unloaded", "loading", "cpu", "gpu", "error"]
 # The source commit, for /health (AGPL section 13). The image's Dockerfile sets it from the build.
 COMMIT_ENV = "ARGUS_RETINA_COMMIT"
 
+# The largest image /infer decodes, in pixels: 2**27 (134 MP, about 400 MB as BGR) still admits a 108 MP phone photo.
+# OpenCV's own default is 2**30 (about 3 GB as BGR), so a small, highly compressed upload declaring huge dimensions
+# could OOM the server. OpenCV checks the header against OPENCV_IO_MAX_IMAGE_PIXELS before it allocates, but reads
+# it when cv2 is imported, so it is set here: every image module imports this one before anything imports cv2.
+# decode_bgr checks the decoded size too, so the budget holds (if not the allocation) should cv2 come first.
+MAX_PIXELS_ENV = "ARGUS_RETINA_MAX_PIXELS"
+MAX_PIXELS = int(os.environ.get(MAX_PIXELS_ENV, "") or 2**27)
+os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = str(MAX_PIXELS)
+
 
 class UnreadableImage(ValueError):
     """A part that doesn't decode as an image: the caller's fault (422), unlike a ValueError inside a model."""
@@ -56,14 +65,23 @@ def decode_bgr(data: bytes) -> Any:
     """Three-channel BGR in stored pixel order (no EXIF rotation).
 
     Every detector decodes the same way, so a caller can compare one detector's boxes with another's. Grayscale
-    frames come back as three channels.
+    frames come back as three channels. Raises ``UnreadableImage`` for an empty part, one OpenCV can't decode, and
+    one larger than ``MAX_PIXELS``.
     """
     import cv2  # noqa: PLC0415 - in the server extra
     import numpy as np  # noqa: PLC0415
 
-    mat = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+    if not data:
+        raise UnreadableImage("empty image")
+    try:
+        # cv2.error: a codec failing on corrupt data, or a header over OPENCV_IO_MAX_IMAGE_PIXELS
+        mat = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+    except cv2.error as exc:
+        raise UnreadableImage(f"unreadable image (or over {MAX_PIXELS} pixels)") from exc
     if mat is None:
         raise UnreadableImage("unreadable image")
+    if mat.shape[0] * mat.shape[1] > MAX_PIXELS:
+        raise UnreadableImage(f"image over {MAX_PIXELS} pixels")
     return mat
 
 

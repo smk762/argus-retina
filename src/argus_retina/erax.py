@@ -23,7 +23,8 @@ IOU = float(os.environ.get("ERAX_IOU", "0.3") or "0.3")
 def load() -> Detect:
     if not MODEL.is_file():
         raise FileNotFoundError(f"EraX model not found: {MODEL}")
-    from ultralytics import YOLO  # noqa: PLC0415 - only in the erax image
+    # Only in the erax image, which serves it over HTTP; this repo is AGPL-3.0 (cortex#88).
+    from ultralytics import YOLO  # noqa: PLC0415  # nosemgrep: agpl-import - an AGPL sidecar
 
     model = YOLO(str(MODEL))
 

@@ -23,7 +23,8 @@ RESOLUTION = int(os.environ.get("NUDENET_RESOLUTION", "640") or "640")
 def load() -> Detect:
     if not MODEL.is_file():
         raise FileNotFoundError(f"NudeNet model not found: {MODEL}")
-    from nudenet import NudeDetector  # noqa: PLC0415 - only in the nudenet image
+    # Only in the nudenet image, which serves it over HTTP; this repo is AGPL-3.0 (cortex#88).
+    from nudenet import NudeDetector  # noqa: PLC0415  # nosemgrep: agpl-import - an AGPL sidecar
 
     detector = NudeDetector(model_path=str(MODEL), inference_resolution=RESOLUTION)
 
