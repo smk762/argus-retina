@@ -5,6 +5,16 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-19
+
+### Fixed
+
+- **Audit findings (#8).** `decode_bgr` turns an empty or corrupt part (`cv2.error`) into `UnreadableImage` (422)
+  instead of a 500. Decoded images are capped at `ARGUS_RETINA_MAX_PIXELS` (default 2**27) through
+  `OPENCV_IO_MAX_IMAGE_PIXELS`, set before cv2 is imported, plus a check after decoding. The watermark weights guard
+  joins continuation lines and checks every instruction, case-insensitively. The nudenet and ultralytics imports
+  carry a reasoned `nosemgrep: agpl-import` marker, and a test keeps the markers and the AGPL licence field.
+
 ## [0.1.0] - 2026-11-16
 
 ### Added
