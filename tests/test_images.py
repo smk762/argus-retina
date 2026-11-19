@@ -45,13 +45,68 @@ def test_erax_weights_are_pinned_to_a_hub_commit_and_checksum():
     assert re.search(r"ERAX_SHA256=[0-9a-f]{64}", text)
 
 
+_WEIGHT_FETCH = re.compile(
+    r"curl|wget|weights|\.(pt|pth|safetensors|onnx|bin|ckpt)\b|hf_hub_download|huggingface|/resolve/"
+    r"|urlretrieve|urlopen|git\s+(clone|lfs)|^ADD\s.*https?://",
+    re.IGNORECASE,
+)
+
+
+def fetched_weights(dockerfile: str) -> list[str]:
+    """The instructions that look like they fetch or copy in weights.
+
+    Comment lines are dropped first, as Docker does (a comment ending in a backslash continues nothing), then
+    continuations are joined, so every line of a multi-line RUN is seen whatever its indentation; every instruction is
+    checked, in any case, except ENV and LABEL, which only name the mount point.
+    """
+    text = "\n".join(ln for ln in dockerfile.splitlines() if not ln.lstrip().startswith("#"))
+    text = re.sub(r"\\[ \t]*\n", " ", text)
+    hits = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.split(maxsplit=1)[0].upper() in ("ENV", "LABEL"):
+            continue
+        if _WEIGHT_FETCH.search(line):
+            hits.append(line)
+    return hits
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        "RUN pip install x \\\n      python -c 'from huggingface_hub import hf_hub_download; hf_hub_download(\"a\")'",
+        "RUN true \\\n        curl -L https://example.com/w -o /models/w",
+        "RUN true \\\n\t&& wget https://example.com/w",
+        "run curl -L https://example.com/w -o /models/w",
+        "add https://example.com/yolo11x.pt /models/watermark.pt",
+        "  RUN wget https://example.com/w",
+        "COPY images/watermark/weights/ /models/",
+        "# fetch the model \\\nRUN curl -L https://example.com/w -o /models/w",
+        "ADD https://example.com/model.safetensors /models/",
+        'RUN python -c \'import urllib.request as u; u.urlretrieve("https://example.com/m", "/models/m")\'',
+    ],
+)
+def test_the_weights_guard_sees_every_layout_of_a_download(step):
+    assert fetched_weights(f"FROM python:3.12-slim\n{step}\nENV WATERMARK_MODEL=/models/watermark.pt\n")
+
+
 def test_the_watermark_image_bakes_in_no_weights():
     # fancyfeast's YOLO11x has no stated licence: it is mounted at runtime, never redistributed (argus-cortex#88)
     text = (ROOT / "images" / "watermark" / "Dockerfile").read_text()
-    steps = [line for line in text.splitlines() if line.startswith(("RUN", "COPY", "ADD", "    &&"))]
-    assert not any("curl" in s or "wget" in s or "weights" in s or ".pt" in s for s in steps)
+    assert fetched_weights(text) == []
     assert "WATERMARK_MODEL=/models/watermark.pt" in text
     assert "images/watermark/weights" in (ROOT / ".dockerignore").read_text()
+
+
+@pytest.mark.parametrize("module", ["nudenet", "erax", "watermark"])
+def test_agpl_imports_are_marked_as_served_over_http_from_an_agpl_repo(module):
+    # The suite rule agpl-import flags in-process nudenet/ultralytics. Here that is the point: each image serves its
+    # detector over HTTP, and the whole repo is AGPL (cortex#88), so callers stay MIT. Keep the licence and markers.
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    assert 'license = "AGPL-3.0-only"' in pyproject  # copier update resets it to MIT: reject that hunk
+    lines = (ROOT / "src" / "argus_retina" / f"{module}.py").read_text().splitlines()
+    imports = [ln for ln in lines if re.match(r"\s*(from|import) (nudenet|ultralytics)\b", ln)]
+    assert imports and all("# nosemgrep: agpl-import - " in ln for ln in imports)
 
 
 def test_the_watermark_weights_for_a_local_mount_are_pinned_to_a_space_commit_and_checksum():

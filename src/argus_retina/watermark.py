@@ -28,7 +28,8 @@ IMGSZ = int(os.environ.get("WATERMARK_IMGSZ", "1024") or "1024")
 def load() -> Detect:
     if not MODEL.is_file():
         raise FileNotFoundError(f"watermark model not found: {MODEL} (mount the weights there; see the README)")
-    from ultralytics import YOLO  # noqa: PLC0415 - only in the watermark image
+    # Only in the watermark image, which serves it over HTTP; this repo is AGPL-3.0 (cortex#88).
+    from ultralytics import YOLO  # noqa: PLC0415  # nosemgrep: agpl-import - an AGPL sidecar
 
     model = YOLO(str(MODEL))
 
