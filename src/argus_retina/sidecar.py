@@ -45,6 +45,8 @@ COMMIT_ENV = "ARGUS_RETINA_COMMIT"
 # decode_bgr checks the decoded size too, so the budget holds (if not the allocation) should cv2 come first.
 MAX_PIXELS_ENV = "ARGUS_RETINA_MAX_PIXELS"
 MAX_PIXELS = int(os.environ.get(MAX_PIXELS_ENV, "") or 2**27)
+if not 0 < MAX_PIXELS < 2**64:  # OpenCV parses it as a size_t and aborts the process at import on anything else
+    raise ValueError(f"{MAX_PIXELS_ENV} must be a positive pixel count, not {MAX_PIXELS}")
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = str(MAX_PIXELS)
 
 
@@ -77,6 +79,10 @@ def decode_bgr(data: bytes) -> Any:
         # cv2.error: a codec failing on corrupt data, or a header over OPENCV_IO_MAX_IMAGE_PIXELS
         mat = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
     except cv2.error as exc:
+        if (
+            getattr(exc, "code", None) == cv2.Error.StsNoMem
+        ):  # the server ran out of memory: a 500, not the caller's fault
+            raise
         raise UnreadableImage(f"unreadable image (or over {MAX_PIXELS} pixels)") from exc
     if mat is None:
         raise UnreadableImage("unreadable image")

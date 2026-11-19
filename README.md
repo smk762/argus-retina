@@ -57,7 +57,7 @@ nn.info().detector          # "640m"
 nn.check(image_bytes)       # detections, labels, exposed_score
 ```
 
-Settings, all optional: `NUDENET_RESOLUTION` (640), `ERAX_CONF` (0.2), `ERAX_IOU` (0.3), `WATERMARK_CONF` (0.2, a reporting floor below curator's own `min_conf`), `WATERMARK_IOU` (0.5), `WATERMARK_IMGSZ` (1024), `OCR_MIN_SCORE` (0.5: lines read with less confidence are dropped).
+Settings, all optional: `NUDENET_RESOLUTION` (640), `ERAX_CONF` (0.2), `ERAX_IOU` (0.3), `WATERMARK_CONF` (0.2, a reporting floor below curator's own `min_conf`), `WATERMARK_IOU` (0.5), `WATERMARK_IMGSZ` (1024), `OCR_MIN_SCORE` (0.5: lines read with less confidence are dropped), `ARGUS_RETINA_MAX_PIXELS` (2**27: a larger image is a 422, refused from its header before it is decoded).
 
 ## Licence
 

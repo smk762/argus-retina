@@ -45,16 +45,22 @@ def test_erax_weights_are_pinned_to_a_hub_commit_and_checksum():
     assert re.search(r"ERAX_SHA256=[0-9a-f]{64}", text)
 
 
-_WEIGHT_FETCH = re.compile(r"curl|wget|weights|\.pt\b|hf_hub_download|huggingface|/resolve/", re.IGNORECASE)
+_WEIGHT_FETCH = re.compile(
+    r"curl|wget|weights|\.(pt|pth|safetensors|onnx|bin|ckpt)\b|hf_hub_download|huggingface|/resolve/"
+    r"|urlretrieve|urlopen|git\s+(clone|lfs)|^ADD\s.*https?://",
+    re.IGNORECASE,
+)
 
 
 def fetched_weights(dockerfile: str) -> list[str]:
     """The instructions that look like they fetch or copy in weights.
 
-    Continuations are joined first, so every line of a multi-line RUN is seen whatever its indentation; every
-    instruction is checked, in any case, except ENV and LABEL, which only name the mount point.
+    Comment lines are dropped first, as Docker does (a comment ending in a backslash continues nothing), then
+    continuations are joined, so every line of a multi-line RUN is seen whatever its indentation; every instruction is
+    checked, in any case, except ENV and LABEL, which only name the mount point.
     """
-    text = re.sub(r"\\[ \t]*\n", " ", dockerfile)
+    text = "\n".join(ln for ln in dockerfile.splitlines() if not ln.lstrip().startswith("#"))
+    text = re.sub(r"\\[ \t]*\n", " ", text)
     hits = []
     for line in text.splitlines():
         line = line.strip()
@@ -75,6 +81,9 @@ def fetched_weights(dockerfile: str) -> list[str]:
         "add https://example.com/yolo11x.pt /models/watermark.pt",
         "  RUN wget https://example.com/w",
         "COPY images/watermark/weights/ /models/",
+        "# fetch the model \\\nRUN curl -L https://example.com/w -o /models/w",
+        "ADD https://example.com/model.safetensors /models/",
+        'RUN python -c \'import urllib.request as u; u.urlretrieve("https://example.com/m", "/models/m")\'',
     ],
 )
 def test_the_weights_guard_sees_every_layout_of_a_download(step):
@@ -95,7 +104,7 @@ def test_agpl_imports_are_marked_as_served_over_http_from_an_agpl_repo(module):
     # detector over HTTP, and the whole repo is AGPL (cortex#88), so callers stay MIT. Keep the licence and markers.
     pyproject = (ROOT / "pyproject.toml").read_text()
     assert 'license = "AGPL-3.0-only"' in pyproject  # copier update resets it to MIT: reject that hunk
-    lines = [ln for ln in (ROOT / "src" / "argus_retina" / f"{module}.py").read_text().splitlines()]
+    lines = (ROOT / "src" / "argus_retina" / f"{module}.py").read_text().splitlines()
     imports = [ln for ln in lines if re.match(r"\s*(from|import) (nudenet|ultralytics)\b", ln)]
     assert imports and all("# nosemgrep: agpl-import - " in ln for ln in imports)
 

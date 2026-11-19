@@ -81,7 +81,7 @@ def test_an_empty_part_is_a_422():
 def test_opencv_refuses_images_over_the_pixel_budget_before_decoding():
     # OpenCV reads the limit when cv2 is imported, so this runs in a fresh interpreter, importing the sidecar first
     # as every image module does.
-    assert os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] == str(sidecar.MAX_PIXELS) and sidecar.MAX_PIXELS <= 2**27
+    assert os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] == str(sidecar.MAX_PIXELS)
     code = textwrap.dedent(
         """
         from argus_retina.sidecar import UnreadableImage, decode_bgr
@@ -90,14 +90,23 @@ def test_opencv_refuses_images_over_the_pixel_budget_before_decoding():
         assert decode_bgr(cv2.imencode(".png", np.zeros((20, 20, 3), np.uint8))[1].tobytes()).shape == (20, 20, 3)
         try:
             decode_bgr(buf.tobytes())
-        except UnreadableImage:
-            print("refused")
+        except UnreadableImage as exc:
+            print(exc)  # OpenCV's header check, not decode_bgr's fallback ("image over ...")
         """
     )
     env = {**os.environ, "ARGUS_RETINA_MAX_PIXELS": "1000"}
     env.pop("OPENCV_IO_MAX_IMAGE_PIXELS", None)
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
-    assert out.stdout.strip() == "refused"
+    assert out.stdout.strip() == "unreadable image (or over 1000 pixels)"
+
+
+@pytest.mark.parametrize("value", ["0", "-5", str(2**64)])
+def test_a_pixel_budget_opencv_cannot_parse_fails_with_a_clear_error(value):
+    # OpenCV aborts the whole process (std::stoull) on a negative or overflowing limit; refuse it before cv2 sees it.
+    env = {**os.environ, "ARGUS_RETINA_MAX_PIXELS": value}
+    code = "import argus_retina.sidecar"
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert out.returncode == 1 and "ARGUS_RETINA_MAX_PIXELS must be a positive pixel count" in out.stderr
 
 
 def test_a_decoded_image_over_the_budget_is_unreadable(monkeypatch):
