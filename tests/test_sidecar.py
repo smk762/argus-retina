@@ -11,7 +11,7 @@ import threading
 import cv2
 import numpy as np
 import pytest
-from argus_cortex.gpu_wire import ResidentHealth
+from argus_cortex.gpu_wire import ResidentActionReply, ResidentBusyReply, ResidentHealth
 from argus_cortex.moderation.nudenet import NudeNetInfo
 from fastapi.testclient import TestClient
 
@@ -213,3 +213,144 @@ def test_the_image_modules_import_without_their_detector(module, monkeypatch, tm
     monkeypatch.setattr(mod, "DET" if module.endswith(".ocr") else "MODEL", tmp_path / "missing.onnx")
     with pytest.raises(FileNotFoundError):
         mod.load()
+
+
+# --- GPU residents: the admin routes ---------------------------------------------------------------------------------
+
+
+def gpu_client(loader=None, *, released=None):
+    r = Resident(
+        "Guard",
+        loader or (lambda: lambda images: [[] for _ in images]),
+        {"model": "m"},
+        device="gpu",
+        release=(lambda: released.append(1)) if released is not None else None,
+        memory=lambda: {"free_vram_mb": 1000.0, "total_mb": 8000.0},
+    )
+    return TestClient(create_app(r, load=False)), r
+
+
+def test_a_cpu_image_has_no_admin_routes():
+    c, r = client(fake_loader([]))
+    r.load()
+    assert c.post("/admin/unload").status_code == 404
+
+
+def test_a_gpu_resident_reports_gpu_and_its_memory():
+    c, r = gpu_client()
+    r.load()
+    h = ResidentHealth.model_validate(c.get("/health").json())
+    assert h.model_state == "gpu" and h.on_gpu and h.gpu is not None and h.gpu.total_mb == 8000
+    assert c.get("/health").json()["device"] == "gpu"
+
+
+def test_unload_frees_the_model_and_wake_loads_it_again():
+    loads, released = [], []
+
+    def load():
+        loads.append(1)
+        return lambda images: [[] for _ in images]
+
+    c, r = gpu_client(load, released=released)
+    r.load()
+    reply = ResidentActionReply.model_validate(c.post("/admin/unload").json())
+    assert reply.model_state == "unloaded" and reply.unloaded is True and released == [1]
+    again = ResidentActionReply.model_validate(c.post("/admin/evict").json())  # evict is an unload here
+    assert again.unloaded is False and released == [1]
+    woke = ResidentActionReply.model_validate(c.post("/admin/wake").json())
+    assert woke.model_state == "gpu" and woke.unloaded is None and loads == [1, 1]
+    assert c.post("/admin/wake").status_code == 200 and loads == [1, 1]  # already loaded: nothing to do
+
+
+def test_an_unloaded_gpu_model_loads_on_the_next_request():
+    loads = []
+
+    def load():
+        loads.append(1)
+        return lambda images: [[{"class": "x", "score": 1.0, "box": [0, 0, 1, 1]}] for _ in images]
+
+    c, r = gpu_client(load)
+    r.load()
+    r.unload()
+    assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 200
+    assert loads == [1, 1] and r.state == "gpu"
+
+
+def test_unload_while_busy_is_a_409_and_does_nothing():
+    started, release = threading.Event(), threading.Event()
+
+    def load():
+        def detect_all(images):
+            started.set()
+            release.wait(5)
+            return [[] for _ in images]
+
+        return detect_all
+
+    c, r = gpu_client(load)
+    r.load()
+    t = threading.Thread(target=r.detect, args=([b"x"],))
+    t.start()
+    assert started.wait(5)
+    try:
+        resp = c.post("/admin/unload")
+        assert resp.status_code == 409
+        busy = ResidentBusyReply.model_validate(resp.json())
+        assert busy.active == 1 and r.state == "gpu"
+    finally:
+        release.set()
+        t.join(5)
+    assert c.post("/admin/unload").status_code == 200
+
+
+def test_admin_routes_while_loading_or_failed_are_503():
+    gate = threading.Event()
+
+    def slow_load():
+        gate.wait(5)
+        raise RuntimeError("CUDA out of memory")
+
+    c, r = gpu_client(slow_load)
+    t = r.start()
+    try:
+        while r.state != "loading":
+            pass
+        assert c.post("/admin/unload").status_code == 503
+        assert c.post("/admin/wake").status_code == 503
+    finally:
+        gate.set()
+        t.join(5)
+    assert r.state == "error"
+    resp = c.post("/admin/wake")  # tries again, and says why it failed
+    assert resp.status_code == 503 and "out of memory" in resp.json()["detail"]
+
+
+def test_admin_routes_need_the_token_when_one_is_set(monkeypatch):
+    c, r = gpu_client()
+    r.load()
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", "s3cret")
+    assert c.post("/admin/unload").status_code == 401
+    assert c.post("/admin/unload", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert c.post("/admin/unload", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("body", "healthy"),
+    [
+        ({"model_state": "gpu"}, True),
+        ({"model_state": "cpu"}, True),
+        ({"model_state": "unloaded", "device": "gpu"}, True),  # argus-iris freed it; the next request loads it
+        ({"model_state": "unloaded", "device": "cpu"}, False),
+        ({"model_state": "loading"}, False),
+        ({"model_state": "error"}, False),
+        ([], False),
+    ],
+)
+def test_the_healthcheck(body, healthy, monkeypatch):
+    import io
+    import json
+
+    from argus_retina import healthcheck
+
+    monkeypatch.setattr(healthcheck.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(json.dumps(body).encode()))
+    assert healthcheck.main() == (0 if healthy else 1)

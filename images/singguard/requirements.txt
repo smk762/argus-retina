@@ -1,0 +1,8 @@
+# SingGuard-4b on transformers (torch and torchvision come from the CUDA index first; see the Dockerfile).
+# transformers 4.57.1 is the version the model was saved with; Qwen3-VL needs no remote code there.
+transformers==4.57.1
+accelerate==1.10.1
+bitsandbytes==0.48.2
+pillow==11.3.0
+# The admin routes' bearer check (argus_cortex.auth, MIT; from 0.8).
+argus-cortex==0.10.0

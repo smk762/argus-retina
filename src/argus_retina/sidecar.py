@@ -8,8 +8,13 @@ in field order. ``argus_cortex.moderation`` parses it.
 image runs (``model`` and whatever else it names, e.g. ``resolution``, which ``NudeNetClient.info()`` reads), and
 ``version`` and ``commit``: AGPL section 13, the source this image was built from.
 
-The model loads on a background thread at startup, so ``/health`` answers ``loading`` (then ``cpu``, or ``error``)
-instead of the port staying closed. ``/infer`` answers 503 until it is loaded. One inference runs at a time.
+The model loads on a background thread at startup, so ``/health`` answers ``loading`` (then ``cpu`` or ``gpu``, or
+``error``) instead of the port staying closed. ``/infer`` answers 503 until it is loaded. One inference runs at a time.
+
+An image that holds VRAM (``Resident(..., device="gpu")``) also serves argus-cortex's resident admin routes,
+``POST /admin/unload``, ``/admin/evict`` and ``/admin/wake``, behind ``Authorization: Bearer $ARGUS_ADMIN_TOKEN``
+(open while the token is unset, as the suite's other residents are). They answer ``ResidentActionReply``, or 409
+``ResidentBusyReply`` while work runs. After an unload the next request loads the model again.
 
 Moved from argus-cull's ``sidecar-common/sidecar.py`` (argus-cortex#88).
 """
@@ -24,16 +29,29 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 
 import argus_retina
 
-__all__ = ["Detect", "Loader", "Resident", "UnreadableImage", "create_app", "decode_bgr", "form_images"]
+__all__ = [
+    "Busy",
+    "Detect",
+    "Loader",
+    "NotReady",
+    "Resident",
+    "UnreadableImage",
+    "create_app",
+    "decode_bgr",
+    "form_images",
+]
 
 Detect = Callable[[list[bytes]], list[list[dict[str, Any]]]]
-Loader = Callable[[], Detect]
+# What a loader returns: the detector /infer calls (Detect), or the model object a module's own route uses.
+Loader = Callable[[], Any]
 State = Literal["unloaded", "loading", "cpu", "gpu", "error"]
+Device = Literal["cpu", "gpu"]
 
 # The source commit, for /health (AGPL section 13). The image's Dockerfile sets it from the build.
 COMMIT_ENV = "ARGUS_RETINA_COMMIT"
@@ -52,6 +70,18 @@ os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = str(MAX_PIXELS)
 
 class UnreadableImage(ValueError):
     """A part that doesn't decode as an image: the caller's fault (422), unlike a ValueError inside a model."""
+
+
+class Busy(RuntimeError):
+    """An admin action refused because work is running: nothing was done (409)."""
+
+    def __init__(self, active: int):
+        super().__init__(f"{active} running")
+        self.active = active
+
+
+class NotReady(RuntimeError):
+    """The model is loading or failed to load (503)."""
 
 
 async def form_images(form: Any) -> list[bytes]:
@@ -92,50 +122,130 @@ def decode_bgr(data: bytes) -> Any:
 
 
 class Resident:
-    """One detector: loads it, runs one inference at a time, and reports its state for ``/health``."""
+    """One model: loads it, runs one inference at a time, and reports its state for ``/health``.
 
-    def __init__(self, name: str, loader: Loader, info: dict[str, Any]):
+    *device* is where the loaded model lives. ``"cpu"`` images never unload; a ``"gpu"`` one can be unloaded (and
+    woken) by argus-iris through the admin routes, and loads again on the next request. *release* runs after an
+    unload, once the model is dropped (``gc`` and ``torch.cuda.empty_cache``); *memory* returns ``/health``'s ``gpu``
+    block (cortex's ``ResidentGpu``), or None when it can't be read.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        loader: Loader,
+        info: dict[str, Any],
+        *,
+        device: Device = "cpu",
+        release: Callable[[], None] | None = None,
+        memory: Callable[[], dict[str, float] | None] | None = None,
+    ):
         self.name = name
         self.info = info
+        self.device: Device = device
         self._loader = loader
-        self._detect: Detect | None = None
+        self._release = release
+        self._memory = memory
+        self._model: Any = None
         self.state: State = "unloaded"
         self.error = ""
-        self._lock = threading.Lock()  # one inference at a time
+        self._lock = threading.Lock()  # one inference, or one unload, at a time
+        self._load_lock = threading.Lock()  # one load at a time
         self._busy = 0
         self._busy_lock = threading.Lock()
         self._last_done: float | None = None
         self.log = logging.getLogger(f"argus_retina.{name.lower()}")
 
     def load(self) -> None:
-        self.state = "loading"
-        try:
-            self._detect = self._loader()
-        except Exception as exc:  # reported on /health; the server stays up to say so
-            self.log.exception("%s failed to load", self.name)
-            self.state, self.error = "error", f"{type(exc).__name__}: {exc}"[:500]
-            return
-        self.state = "cpu"  # retina images run on the CPU (CUDA_VISIBLE_DEVICES is empty)
-        self._last_done = time.monotonic()
-        self.log.info("%s loaded: %s", self.name, self.info)
+        with self._load_lock:
+            if self._model is not None:
+                return
+            self.state, self.error = "loading", ""
+            try:
+                model = self._loader()
+            except Exception as exc:  # reported on /health; the server stays up to say so
+                self.log.exception("%s failed to load", self.name)
+                self.state, self.error = "error", f"{type(exc).__name__}: {exc}"[:500]
+                return
+            self._model = model
+            # CPU images keep CUDA_VISIBLE_DEVICES empty; a GPU image's loader puts the model on the GPU or fails.
+            self.state = self.device
+            self._last_done = time.monotonic()
+            self.log.info("%s loaded: %s", self.name, self.info)
 
     def start(self) -> threading.Thread:
         t = threading.Thread(target=self.load, name=f"load-{self.name}", daemon=True)
         t.start()
         return t
 
-    def detect(self, images: list[bytes]) -> list[list[dict[str, Any]]]:
-        if self._detect is None:
-            raise RuntimeError(f"{self.name} is not loaded")
+    def run(self, work: Callable[[Any], Any]) -> Any:
+        """``work(model)``, one call at a time. A GPU model unloaded by an admin loads again first.
+
+        Raises ``NotReady`` while the model is loading or failed to load.
+        """
         with self._busy_lock:
             self._busy += 1
         try:
             with self._lock:
-                return self._detect(images)
+                if self._model is None and self.device == "gpu" and self.state == "unloaded":
+                    self.load()
+                model = self._model
+                if model is None:
+                    raise NotReady(f"{self.name} is {self.state}")
+                return work(model)
         finally:
             with self._busy_lock:
                 self._busy -= 1
                 self._last_done = time.monotonic()
+
+    def detect(self, images: list[bytes]) -> list[list[dict[str, Any]]]:
+        return self.run(lambda detect: detect(images))
+
+    @property
+    def ready(self) -> bool:
+        """A request would be served: the model is loaded, or (on a GPU image) unloaded and loads on demand."""
+        return self.state in ("cpu", "gpu") or (self.device == "gpu" and self.state == "unloaded")
+
+    def unload(self) -> bool:
+        """Drop the model and free what it held. True when something was freed, False when it was already unloaded.
+
+        Raises ``Busy`` while work runs or waits, and ``NotReady`` while the model is loading.
+        """
+        if not self._load_lock.acquire(blocking=False):
+            raise NotReady(f"{self.name} is loading")
+        try:
+            if not self._lock.acquire(blocking=False):
+                raise Busy(max(self._busy, 1))
+            try:
+                if self._busy:  # a request waiting for the lock counts: it was accepted
+                    raise Busy(self._busy)
+                freed, self._model = self._model is not None, None
+                if freed and self._release is not None:
+                    self._release()
+                self.state, self.error = "unloaded", ""
+            finally:
+                self._lock.release()
+        finally:
+            self._load_lock.release()
+        self.log.info("%s unloaded (freed: %s)", self.name, freed)
+        return freed
+
+    def wake(self) -> None:
+        """Load the model now, if it isn't loaded. Raises ``Busy``, or ``NotReady`` when it is loading or fails."""
+        if self._model is not None:
+            return
+        if self.state == "loading":
+            raise NotReady(f"{self.name} is loading")
+        if not self._lock.acquire(blocking=False):
+            raise Busy(max(self._busy, 1))
+        try:
+            self.load()
+        finally:
+            self._lock.release()
+        if self._model is None:
+            raise NotReady(
+                f"{self.name} is {self.state}: {self.error}" if self.error else f"{self.name} is {self.state}"
+            )
 
     def health(self) -> dict[str, Any]:
         busy = self._busy > 0
@@ -148,17 +258,34 @@ class Resident:
             "busy": busy,
             "idle_s": idle,
             "detector": self.name,
+            "device": self.device,
             **self.info,
             "version": argus_retina.__version__,
             "commit": os.environ.get(COMMIT_ENV) or None,
         }
+        if self._memory is not None:
+            try:
+                gpu = self._memory()
+            except Exception:  # memory figures are a nicety; /health must still answer
+                self.log.debug("reading GPU memory failed", exc_info=True)
+                gpu = None
+            if gpu:
+                body["gpu"] = gpu
         if self.error:
             body["error"] = self.error
         return body
 
+    def action_reply(self, unloaded: bool | None) -> dict[str, Any]:
+        """``ResidentActionReply``: the state after an admin action."""
+        return {"resident_version": "1.0", "status": "ok", "model_state": self.state, "unloaded": unloaded}
 
-def create_app(resident: Resident, *, load: bool = True) -> FastAPI:
-    """The FastAPI app around *resident*. ``load=False`` leaves loading to the caller (tests)."""
+
+def create_app(resident: Resident, *, load: bool = True, infer: bool = True) -> FastAPI:
+    """The FastAPI app around *resident*. ``load=False`` leaves loading to the caller (tests).
+
+    ``infer=False`` leaves out ``POST /infer``, for an image that serves its own route (SingGuard). A GPU resident
+    also gets the admin routes.
+    """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
@@ -173,24 +300,59 @@ def create_app(resident: Resident, *, load: bool = True) -> FastAPI:
     async def health() -> dict[str, Any]:
         return resident.health()
 
-    @app.post("/infer")
-    async def infer(request: Request) -> dict[str, Any]:
-        if resident.state not in ("cpu", "gpu"):
-            raise HTTPException(status_code=503, detail=f"{resident.name} is {resident.state}")
-        async with request.form() as form:  # closes the spooled upload files
-            images = await form_images(form)
-        if not images:
-            raise HTTPException(status_code=400, detail="expected multipart image fields (f1, ...)")
-        try:
-            prediction = await run_in_threadpool(resident.detect, images)
-        except UnreadableImage as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except Exception as exc:
-            resident.log.exception("%s detect failed", resident.name)
-            raise HTTPException(status_code=500, detail=f"{resident.name} detect failed") from exc
-        return {"prediction": prediction, "success": True}
+    if infer:
+
+        @app.post("/infer")
+        async def infer_route(request: Request) -> dict[str, Any]:
+            if not resident.ready:
+                raise HTTPException(status_code=503, detail=f"{resident.name} is {resident.state}")
+            async with request.form() as form:  # closes the spooled upload files
+                images = await form_images(form)
+            if not images:
+                raise HTTPException(status_code=400, detail="expected multipart image fields (f1, ...)")
+            try:
+                prediction = await run_in_threadpool(resident.detect, images)
+            except UnreadableImage as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except NotReady as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except Exception as exc:
+                resident.log.exception("%s detect failed", resident.name)
+                raise HTTPException(status_code=500, detail=f"{resident.name} detect failed") from exc
+            return {"prediction": prediction, "success": True}
+
+    if resident.device == "gpu":
+        add_admin_routes(app, resident)
 
     return app
+
+
+def add_admin_routes(app: FastAPI, resident: Resident) -> None:
+    """``/admin/unload``, ``/admin/evict`` and ``/admin/wake`` (argus-cortex's resident contract).
+
+    Evict is an unload here: a GPU model on this server has no CPU stage to keep it warm in (a 4-bit bitsandbytes
+    model can't move to the CPU), so a manifest declares only ``unload_path`` and ``warm_path``.
+    """
+    from argus_cortex.auth import bearer  # noqa: PLC0415 - GPU images install argus-cortex; CPU images need no admin
+
+    admin = [Depends(bearer("ARGUS_ADMIN_TOKEN", open_when_unset=True))]
+
+    def act(action: Callable[[], bool | None]) -> Callable[[], Any]:
+        async def route() -> Any:
+            try:
+                unloaded = await run_in_threadpool(action)
+            except Busy as exc:
+                body = {"resident_version": "1.0", "status": "busy", "active": exc.active}
+                return JSONResponse(status_code=409, content=body)
+            except NotReady as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            return resident.action_reply(unloaded)
+
+        return route
+
+    app.add_api_route("/admin/unload", act(resident.unload), methods=["POST"], dependencies=admin)
+    app.add_api_route("/admin/evict", act(resident.unload), methods=["POST"], dependencies=admin)
+    app.add_api_route("/admin/wake", act(resident.wake), methods=["POST"], dependencies=admin)
 
 
 def configure_logging() -> None:
