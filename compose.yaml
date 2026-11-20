@@ -66,8 +66,18 @@ services:
       - SINGGUARD_QUANT=${SINGGUARD_QUANT:-4bit}
       - SINGGUARD_FORCE_THINKING=${SINGGUARD_FORCE_THINKING:-}
       - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
+      # GPU leases (argus_cortex.gpu): the host's settings, as the suite's other GPU stages take them. Unset is none.
+      # broker asks argus-iris (ARGUS_GPU_BROKER_URL and _TOKEN), falling back to a host lock at ARGUS_GPU_LEASE_PATH.
+      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-none}
+      - ARGUS_GPU_BROKER_URL=${ARGUS_GPU_BROKER_URL:-}
+      - ARGUS_GPU_BROKER_TOKEN=${ARGUS_GPU_BROKER_TOKEN:-}
+      - ARGUS_GPU_BROKER_FALLBACK=${ARGUS_GPU_BROKER_FALLBACK:-lease}
+      - ARGUS_GPU_LEASE_PATH=/run/argus-gpu/argus-gpu.lock
+      - ARGUS_GPU_LEASE_TIMEOUT_S=${ARGUS_GPU_LEASE_TIMEOUT_S:-300}
     volumes:
       - singguard_weights:/models/singguard
+      # The host lock every argus GPU service shares, for when the broker can't be reached.
+      - ${ARGUS_GPU_LOCK_DIR:-/tmp/argus-gpu}:/run/argus-gpu
     gpus: all
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${SINGGUARD_PORT:-8134}:8080"

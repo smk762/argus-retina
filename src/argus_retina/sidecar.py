@@ -26,7 +26,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -52,6 +52,8 @@ Detect = Callable[[list[bytes]], list[list[dict[str, Any]]]]
 Loader = Callable[[], Any]
 State = Literal["unloaded", "loading", "cpu", "gpu", "error"]
 Device = Literal["cpu", "gpu"]
+# A GPU lease from argus-cortex's coordinator (argus-iris's broker, a host lock, or nothing), held for a block of work.
+Lease = Callable[[], AbstractContextManager[Any]]
 
 # The source commit, for /health (AGPL section 13). The image's Dockerfile sets it from the build.
 COMMIT_ENV = "ARGUS_RETINA_COMMIT"
@@ -70,6 +72,23 @@ os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = str(MAX_PIXELS)
 
 class UnreadableImage(ValueError):
     """A part that doesn't decode as an image: the caller's fault (422), unlike a ValueError inside a model."""
+
+
+class _Entered:
+    """A context manager whose ``__enter__`` failing (the lease refused or timed out) is ``NotReady``, while an error in
+    the body passes through as itself."""
+
+    def __init__(self, cm: AbstractContextManager[Any]):
+        self._cm = cm
+
+    def __enter__(self) -> Any:
+        try:
+            return self._cm.__enter__()
+        except Exception as exc:
+            raise NotReady(f"no GPU lease: {exc}") from exc
+
+    def __exit__(self, *exc_info: Any) -> Any:
+        return self._cm.__exit__(*exc_info)
 
 
 class Busy(RuntimeError):
@@ -128,6 +147,11 @@ class Resident:
     woken) by argus-iris through the admin routes, and loads again on the next request. *release* runs after an
     unload, once the model is dropped (``gc`` and ``torch.cuda.empty_cache``); *memory* returns ``/health``'s ``gpu``
     block (cortex's ``ResidentGpu``), or None when it can't be read.
+
+    *lease*, on a GPU image, holds a GPU lease (``argus_cortex.gpu``) around the startup load and around each request,
+    including the load a request after an unload does, so argus-iris can make room first. It is taken inside the
+    one-at-a-time lock: one request, one lease. ``wake`` takes none: argus-iris calls it, having made room itself. A
+    lease that can't be had is ``NotReady`` (503), and the reason is kept.
     """
 
     def __init__(
@@ -139,6 +163,7 @@ class Resident:
         device: Device = "cpu",
         release: Callable[[], None] | None = None,
         memory: Callable[[], dict[str, float] | None] | None = None,
+        lease: Lease | None = None,
     ):
         self.name = name
         self.info = info
@@ -146,6 +171,7 @@ class Resident:
         self._loader = loader
         self._release = release
         self._memory = memory
+        self._lease = lease
         self._model: Any = None
         self.state: State = "unloaded"
         self.error = ""
@@ -173,8 +199,25 @@ class Resident:
             self._last_done = time.monotonic()
             self.log.info("%s loaded: %s", self.name, self.info)
 
+    def _leased(self) -> AbstractContextManager[Any]:
+        if self._lease is None:
+            return nullcontext()
+        try:
+            return _Entered(self._lease())
+        except Exception as exc:
+            raise NotReady(f"no GPU lease for {self.name}: {exc}") from exc
+
+    def load_leased(self) -> None:
+        """``load`` under a GPU lease: the startup load. A lease that can't be had is reported like a failed load."""
+        try:
+            with self._leased():
+                self.load()
+        except NotReady as exc:
+            self.log.warning("%s", exc)
+            self.state, self.error = "error", str(exc)[:500]
+
     def start(self) -> threading.Thread:
-        t = threading.Thread(target=self.load, name=f"load-{self.name}", daemon=True)
+        t = threading.Thread(target=self.load_leased, name=f"load-{self.name}", daemon=True)
         t.start()
         return t
 
@@ -186,7 +229,7 @@ class Resident:
         with self._busy_lock:
             self._busy += 1
         try:
-            with self._lock:
+            with self._lock, self._leased():
                 if self._model is None and self.device == "gpu" and self.state == "unloaded":
                     self.load()
                 model = self._model

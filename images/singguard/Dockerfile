@@ -22,6 +22,8 @@ ARG VERSION=0.0.0+docker
 ARG COMMIT=
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
+# What GPU leases name the tenant by (ARGUS_GPU_TENANT_MANIFEST).
+COPY images/singguard/gpu-tenant.yaml /app/gpu-tenant.yaml
 RUN SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION} pip install --no-cache-dir ".[server]" \
     && useradd --system --no-create-home retina \
     && mkdir -p /models/singguard \
@@ -36,6 +38,7 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HUB_DISABLE_TELEMETRY=1 \
     SINGGUARD_DIR=/models/singguard \
     SINGGUARD_QUANT=4bit \
+    ARGUS_GPU_TENANT_MANIFEST=/app/gpu-tenant.yaml \
     ARGUS_RETINA_COMMIT=${COMMIT}
 LABEL org.opencontainers.image.title="argus-retina-singguard" \
       org.opencontainers.image.description="SingGuard-4b behind argus-retina's /api/guard/check, /health and /admin routes (GPU; weights fetched to a volume)" \

@@ -354,3 +354,99 @@ def test_the_healthcheck(body, healthy, monkeypatch):
 
     monkeypatch.setattr(healthcheck.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(json.dumps(body).encode()))
     assert healthcheck.main() == (0 if healthy else 1)
+
+
+# --- GPU leases --------------------------------------------------------------------------------------------------------
+
+
+class Leases:
+    """Records each lease and what was running under it."""
+
+    def __init__(self, refuse: Exception | None = None):
+        self.held: list[str] = []
+        self.active = 0
+        self.refuse = refuse
+
+    def __call__(self):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def lease():
+            if self.refuse is not None:
+                raise self.refuse
+            self.active += 1
+            assert self.active == 1  # never two at once: the lease is taken inside the resident's lock
+            try:
+                yield
+            finally:
+                self.active -= 1
+
+        return lease()
+
+
+def leased_client(leases, loads):
+    """A GPU resident under *leases*. *loads* and ``leases.held`` record whether a lease was held at each load and
+    each detect."""
+
+    def detect_all(images):
+        leases.held.append(leases.active)
+        return [[] for _ in images]
+
+    def load():
+        loads.append(leases.active)
+        return detect_all
+
+    r = Resident("Guard", load, {"model": "m"}, device="gpu", lease=leases)
+    return TestClient(create_app(r, load=False)), r
+
+
+def test_the_startup_load_and_each_request_hold_a_lease_and_wake_does_not():
+    leases, loads = Leases(), []
+    c, r = leased_client(leases, loads)
+    r.load_leased()
+    assert loads == [1] and r.state == "gpu"
+    files = [("f1", ("a.png", png(), "image/png"))]
+    assert c.post("/infer", files=files).status_code == 200 and leases.held == [1]
+    r.unload()
+    assert c.post("/infer", files=files).status_code == 200  # reloads under the request's lease
+    assert loads == [1, 1] and leases.held == [1, 1]
+    r.unload()
+    assert c.post("/admin/wake").status_code == 200 and loads == [1, 1, 0]  # argus-iris made room: no lease
+
+
+def test_concurrent_requests_take_one_lease_at_a_time():
+    leases, loads = Leases(), []
+    _, r = leased_client(leases, loads)
+    r.load_leased()
+    threads = [threading.Thread(target=r.detect, args=([b"x"],)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert leases.held == [1, 1, 1, 1]  # Leases asserts none overlapped
+
+
+def test_a_refused_lease_is_a_503_and_a_failed_startup_load():
+    leases, loads = Leases(refuse=TimeoutError("broker queue full")), []
+    c, r = leased_client(leases, loads)
+    r.load_leased()
+    assert r.state == "error" and "broker queue full" in r.error and loads == []
+    leases.refuse = None
+    assert c.post("/admin/wake").status_code == 200  # iris's wake still loads it
+    leases.refuse = TimeoutError("broker queue full")
+    resp = c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))])
+    assert resp.status_code == 503 and "no GPU lease" in resp.json()["detail"]
+    assert r.health()["busy"] is False
+
+
+def test_an_error_inside_a_lease_is_not_a_lease_error():
+    def load():
+        def detect_all(images):
+            raise RuntimeError("model blew up")
+
+        return detect_all
+
+    r = Resident("Guard", load, {}, device="gpu", lease=Leases())
+    r.load()
+    with pytest.raises(RuntimeError, match="model blew up"):
+        r.detect([b"x"])

@@ -15,7 +15,9 @@ later loads read the volume and need no network. Moved from argus-cull's ``singg
 Settings: ``SINGGUARD_DIR`` (``/models/singguard``), ``SINGGUARD_QUANT`` (``4bit``, about 3.5 GB of VRAM, or
 ``bf16``, about 9 GB), ``SINGGUARD_MAX_NEW_TOKENS`` (2048, the reasoning modes' budget: a generation cut off before
 its ``<answer>`` is a failed check), ``SINGGUARD_MAX_NEW_TOKENS_FAST`` (256), ``SINGGUARD_FORCE_THINKING`` (judge
-every request in one mode, whatever it asks for). The weights are Apache-2.0 (SingGuard-4b and its base,
+every request in one mode, whatever it asks for). GPU leases come from the host-wide ``ARGUS_GPU_*`` settings
+(``argus_cortex.gpu.coordinator_from_env``: ``broker`` asks argus-iris, unset takes none); the tenant is named by
+``images/singguard/gpu-tenant.yaml``, copied into the image. The weights are Apache-2.0 (SingGuard-4b and its base,
 Qwen3-VL-4B-Instruct).
 """
 
@@ -81,6 +83,10 @@ MAX_NEW = {
 FORCE_THINKING = os.environ.get("SINGGUARD_FORCE_THINKING", "").strip() or None
 if FORCE_THINKING is not None and FORCE_THINKING not in guard.THINKING:
     raise SystemExit(f"SINGGUARD_FORCE_THINKING must be one of {', '.join(guard.THINKING)}, got {FORCE_THINKING!r}")
+
+# The lease's footprint, as images/singguard/gpu-tenant.yaml declares it for 4-bit (tests keep the two equal): the whole
+# check (weights, a 1536 px image and a 2048-token write-up) and the part that stays loaded after it. bf16 is larger.
+FOOTPRINT_MB = {"4bit": (6000, 3600), "bf16": (12000, 9000)}
 
 # Text bounds: every character is prompt tokens on the GPU. A policy runs to a few thousand characters.
 MAX_TEXT = 32_768
@@ -181,6 +187,22 @@ def load() -> Guard:
     processor = AutoProcessor.from_pretrained(root)
     model = AutoModelForImageTextToText.from_pretrained(root, **kwargs).eval()
     return Guard(model, processor, torch)
+
+
+_coordinator: Any = None
+
+
+def lease() -> Any:
+    """A ``guard`` lease from the host's GPU coordinator, made on first use (the broker client is built once)."""
+    global _coordinator
+    if _coordinator is None:
+        from argus_cortex.gpu import coordinator_from_env  # noqa: PLC0415 - in the singguard image
+
+        _coordinator = coordinator_from_env()
+    vram_mb, model_mb = FOOTPRINT_MB[QUANT]
+    return _coordinator.lease(
+        caller="argus-retina-singguard", min_vram_mb=vram_mb, model_mb=model_mb, kind="guard", priority="interactive"
+    )
 
 
 def release() -> None:
@@ -300,6 +322,7 @@ resident = Resident(
     device="gpu",
     release=release,
     memory=memory,
+    lease=lease,
 )
 configure_logging()
 app = create_app(resident, infer=False)

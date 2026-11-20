@@ -6,6 +6,7 @@ No torch, transformers or network: ``Guard.generate`` is replaced by canned gene
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import io
 import sys
@@ -223,3 +224,36 @@ def test_every_file_transformers_loads_is_pinned():
     }
     assert all(len(h) == 64 and int(h, 16) >= 0 for h in singguard.FILES.values())
     assert len(singguard.REVISION) == 40
+
+
+def test_the_lease_footprint_is_the_manifests_and_comes_from_the_hosts_coordinator(monkeypatch):
+    from pathlib import Path
+
+    from argus_cortex.gpu_wire import load_tenant_manifest
+
+    m = load_tenant_manifest(Path(__file__).parent.parent / "images" / "singguard" / "gpu-tenant.yaml")
+    (kind,) = m.kinds
+    assert singguard.FOOTPRINT_MB["4bit"] == (kind.vram_mb, kind.model_mb)
+
+    asked = []
+
+    class Coordinator:
+        def lease(self, **kwargs):
+            asked.append(kwargs)
+            return contextlib.nullcontext()
+
+    import argus_cortex.gpu
+
+    monkeypatch.setattr(singguard, "_coordinator", None)
+    monkeypatch.setattr(argus_cortex.gpu, "coordinator_from_env", Coordinator)
+    with singguard.lease():
+        pass
+    assert asked == [
+        {
+            "caller": "argus-retina-singguard",
+            "min_vram_mb": kind.vram_mb,
+            "model_mb": kind.model_mb,
+            "kind": "guard",
+            "priority": "interactive",
+        }
+    ]
