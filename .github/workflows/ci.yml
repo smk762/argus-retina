@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [nudenet, erax, watermark, ocr]
+        image: [nudenet, erax, watermark, ocr, singguard]
     steps:
       - uses: actions/checkout@v4
       - name: Fetch weights
@@ -31,6 +31,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: make weights
+      - name: Free disk space
+        if: matrix.image == 'singguard'  # torch's CUDA wheels make a 9.4 GB image; the runner starts with about 14 GB free
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:

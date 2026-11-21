@@ -5,6 +5,29 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+### Added
+
+- **SingGuard, phase 2 of argus-cortex#88 (#9): `ghcr.io/smk762/argus-retina-singguard`**, one SingGuard-4b for the
+  suite in place of argus-cull's `singguard/` service and agent-composer's guard route. `POST /api/guard/check` takes
+  what `argus_cortex.moderation.SingGuardClient` sends, so callers change only a URL: image checks, text-only checks
+  (`input_role`), and agent-composer's `conversation`; `thinking` is `fast`, `fast-slow`, `slow` or `cascade`, as cull
+  served them. Moved from cull: the parsing (an unreadable `<answer>` is unsafe with no rule; no verdict is a `500`,
+  never a pass) and slow's prefilled first step. From composer: control tokens and `[role]:` markers in the caller's
+  text and policy are made plain, so they can't forge a verdict or a turn. Images are shrunk to 1536 px first.
+- **The weights are fetched, not baked in.** SingGuard-4b and its base are Apache-2.0, but 8.9 GB: the first start
+  downloads them at a pinned Hub commit into the `/models/singguard` volume and checks every file's sha256; later
+  starts need no network. 4-bit bitsandbytes by default (about 3.5 GB of VRAM), `SINGGUARD_QUANT=bf16` for full
+  precision.
+- **GPU residents.** `Resident(device="gpu")` reports `gpu` and its memory on `/health` and serves argus-cortex's
+  `/admin/unload`, `/admin/evict` (an unload here) and `/admin/wake`, behind `ARGUS_ADMIN_TOKEN` when set, with `409`
+  while a check runs. After an unload the next request loads the model again, and the HEALTHCHECK counts an unloaded
+  GPU model as healthy. `images/singguard/gpu-tenant.yaml` declares the `guard` kind and the resident for argus-iris.
+- `docker compose --profile gpu up -d` starts SingGuard on `:8134`.
+
+### Changed
+
+- The `dev` extra needs `argus-cortex>=0.8` (`argus_cortex.auth`) and Pillow.
+
 ## [0.1.1] - 2026-11-19
 
 ### Fixed
