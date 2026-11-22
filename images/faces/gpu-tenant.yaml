@@ -1,0 +1,29 @@
+# argus-iris tenant manifest for argus-retina-faces. Validated by argus-cortex's TenantManifest
+# (gpu-tenant-schema.json) in tests/test_images.py.
+#
+# InsightFace buffalo_l plus MiVOLO, on CUDA. Curator measured this pack on a 3090 with the arena cap: about 900 MB
+# once loaded and 1,470 MB at peak. vram_mb is that peak plus headroom; model_mb is what stays loaded.
+#
+# Not pinned, and idle_kill_s is a hint of 10 minutes: a 17 GB ComfyUI or LoRA lease on morpheus needs the room.
+# ONNX Runtime does not return its CUDA arena on /admin/unload, so the broker service should set evict_by: stop.
+# There is no CPU stage (no evict_path).
+tenant_version: "1.0"
+tenant: argus-retina-faces
+description: InsightFace buffalo_l detections and embeddings, plus MiVOLO age, over HTTP. Decisions stay in the caller.
+repo: smk762/argus-retina
+kinds:
+  - kind: faces
+    description: One POST /faces (one or more images). Detection, embedding, pose and MiVOLO age.
+    vram_mb: 1600
+    model_mb: 1000
+    priority: interactive
+residents:
+  - name: faces
+    adapter: argus-http
+    vram_mb: 1000
+    pinned: false
+    idle_kill_s: 600
+    health_path: /health
+    unload_path: /admin/unload
+    warm_path: /admin/wake
+    admin_auth: true

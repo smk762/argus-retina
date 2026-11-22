@@ -2,7 +2,7 @@
 # (the servers have no auth: keep them on a trusted network).
 #   docker compose up -d                      # the released images
 #   docker compose build && docker compose up -d   # from source, after `make weights`
-#   docker compose --profile gpu up -d        # SingGuard too (the one GPU image)
+#   docker compose --profile gpu up -d        # SingGuard and faces too (the GPU images)
 
 services:
   nudenet:
@@ -81,6 +81,43 @@ services:
     gpus: all
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${SINGGUARD_PORT:-8134}:8080"
+
+  faces:
+    # GPU, started with `docker compose --profile gpu`. No weights in the image: mount buffalo_l and the MiVOLO ONNX.
+    # ONNX Runtime keeps its CUDA arena after /admin/unload, so iris should stop this container to free the card.
+    image: ghcr.io/smk762/argus-retina-faces:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/faces/Dockerfile
+    profiles: ["gpu"]
+    restart: unless-stopped
+    environment:
+      - FACES_DET_THRESH=${FACES_DET_THRESH:-0.5}
+      - FACES_GPU_MEM_LIMIT_MB=${FACES_GPU_MEM_LIMIT_MB:-1024}
+      - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
+      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-none}
+      - ARGUS_GPU_BROKER_URL=${ARGUS_GPU_BROKER_URL:-}
+      - ARGUS_GPU_BROKER_TOKEN=${ARGUS_GPU_BROKER_TOKEN:-}
+      - ARGUS_GPU_BROKER_FALLBACK=${ARGUS_GPU_BROKER_FALLBACK:-lease}
+      - ARGUS_GPU_LEASE_PATH=/run/argus-gpu/argus-gpu.lock
+      - ARGUS_GPU_LEASE_TIMEOUT_S=${ARGUS_GPU_LEASE_TIMEOUT_S:-300}
+    volumes:
+      - type: bind
+        source: ${INSIGHTFACE_ROOT:-./images/faces/weights/insightface}
+        target: /models/insightface
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MIVOLO_MODEL:-./images/faces/weights/mivolo_v2_d1_384.onnx}
+        target: /models/faces/mivolo_v2_d1_384.onnx
+        read_only: true
+        bind:
+          create_host_path: false
+      - ${ARGUS_GPU_LOCK_DIR:-/tmp/argus-gpu}:/run/argus-gpu
+    gpus: all
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${FACES_PORT:-8135}:8080"
 
 volumes:
   singguard_weights:

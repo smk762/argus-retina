@@ -215,15 +215,28 @@ def test_the_app_loads_its_model_at_startup():
 
 
 @pytest.mark.parametrize(
-    "module", ["argus_retina.nudenet", "argus_retina.erax", "argus_retina.watermark", "argus_retina.ocr"]
+    "module",
+    [
+        "argus_retina.nudenet",
+        "argus_retina.erax",
+        "argus_retina.watermark",
+        "argus_retina.ocr",
+        "argus_retina.faces",
+    ],
 )
 def test_the_image_modules_import_without_their_detector(module, monkeypatch, tmp_path):
-    # nudenet / ultralytics are only in their images: importing the module must not need them
+    # nudenet / ultralytics / insightface are only in their images: importing the module must not need them
     import importlib
 
     mod = importlib.import_module(module)
     assert mod.resident.state == "unloaded"
-    monkeypatch.setattr(mod, "DET" if module.endswith(".ocr") else "MODEL", tmp_path / "missing.onnx")
+    if module.endswith(".ocr"):
+        monkeypatch.setattr(mod, "DET", tmp_path / "missing.onnx")
+    elif module.endswith(".faces"):
+        monkeypatch.setattr(mod, "ROOT", tmp_path)
+        monkeypatch.setattr(mod, "MIVOLO", tmp_path / "missing.onnx")
+    else:
+        monkeypatch.setattr(mod, "MODEL", tmp_path / "missing.onnx")
     with pytest.raises(FileNotFoundError):
         mod.load()
 

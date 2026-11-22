@@ -8,13 +8,13 @@ The suite's **shared detector servers**: small, stateless model servers that tak
 
 Designed in [argus-cortex#88](https://github.com/smk762/argus-cortex/issues/88); its first job is [argus-cortex#79](https://github.com/smk762/argus-cortex/issues/79), one shared NudeNet 640m in place of the six copies across the suite.
 
-**Status: phase 1 released (v0.1.0) and its callers migrated (#1); phase 2, SingGuard, built (#9).** NudeNet 640m, EraX and watermark have moved here, OCR is new (#5), and SingGuard is the first GPU image. The watermark and SingGuard images ship without weights (see the table below).
+**Status: phase 1 released (v0.1.0) and its callers migrated (#1); phase 2, SingGuard, built (#9); phase 3, faces, started (#10).** NudeNet 640m, EraX and watermark have moved here, OCR is new (#5), and SingGuard and faces are the GPU images. The watermark, SingGuard and faces images ship without weights (see the table below).
 
 ## Layout
 
 ```
 src/argus_retina/  sidecar      # the contract: Resident (background load, one inference at a time, /health; on a GPU, /admin/*), create_app
-                   nudenet erax watermark ocr singguard  # one module per model (yolo: the shared Ultralytics box conversion): load() imports the detector library lazily, so tests run without it
+                   nudenet erax watermark ocr singguard faces  # one module per model (yolo: the shared Ultralytics box conversion): load() imports the detector library lazily, so tests run without it
                    guard        # SingGuard's request shaping, prompt-injection guards and generation parsing, without torch
                    healthcheck  # `python -m argus_retina.healthcheck`: the images' HEALTHCHECK (healthy once loaded)
 images/<model>/    Dockerfile requirements.txt gpu-tenant.yaml   # build from the repo root; weights/ is fetched, gitignored
@@ -53,7 +53,7 @@ In: stateless perception models with no policy. Out:
 
 1. **Phase 1: NudeNet 640m, EraX, watermark.** Move argus-cull's sidecars (`nudenet/`, `erax/`, `watermark/`, and their shared `sidecar-common/sidecar.py`) here. `sidecar.py` becomes the shared base in `src/argus_retina/`, and each model gets a directory with its own Dockerfile and `app.py`. Then switch the release from one image to one per model (`ghcr.io/smk762/argus-retina-<model>`). The migration issues are already filed: argus-curator#156, argus-darkroom#54, argus-proof#80, argus-studio#253, imogen#40, playactai/playact-engine#345, voluptas#25. Each needs the published image and its URL.
 2. **Phase 2: SingGuard**, from argus-cull's `singguard/`, so cull and agent-composer stop each running their own. Check the licence of `inclusionAI/Sing-Guard-4b` first.
-3. **Maybe phase 3: faces** (InsightFace, MiVOLO), served here while curator keeps the decisions. This needs its own design pass and a licence check: InsightFace's pretrained packs are believed to be non-commercial only.
+3. **Phase 3: faces** (InsightFace `buffalo_l`, MiVOLO), served here while curator keeps the decisions. `POST /faces` is the perception (boxes, embeddings, pose, age). `buffalo_l` is mounted, never baked in. FairFace and the person detector stay in curator. Callers are not migrated yet.
 
 ## The contract every image serves
 
@@ -72,6 +72,7 @@ Publishing to GHCR redistributes the weights inside each image. Pin every file b
 | EraX-NSFW-V1.0 (s) | Apache-2.0 | OK |
 | OCR | PP-OCRv6 small det/rec + PP-OCRv4 direction classifier, RapidOCR's v3.10.0 ONNX exports from ModelScope (Apache-2.0, PaddleOCR) | OK; pinned by release URL and sha256 in the Dockerfile |
 | SingGuard-4b | `inclusionAI/SingGuard-4b` (was `Sing-Guard-4b`) at Hub commit `4e082d0`, on Qwen3-VL-4B-Instruct; both Apache-2.0 (checked on #9) | OK to ship, but 8.9 GB: **fetched at runtime** into the `/models/singguard` volume, every file checked against the sha256s in `singguard.FILES` (a test checks the Dockerfile fetches nothing). No remote code: transformers 4.57 has Qwen3-VL |
+| Faces | InsightFace `buffalo_l` (non-commercial: **never bake it in**) mounted at `/models/insightface`; MiVOLO v2 ONNX (Apache-2.0, from `argus-curator mivolo-convert`) mounted at `/models/faces/mivolo_v2_d1_384.onnx` | A test checks the Dockerfile fetches nothing |
 | Watermark | fancyfeast's YOLO11x (Space commit `9bb8f6a`, sha256 `80b022e9…326e`; pinned in the Makefile for `make watermark-weights`) | **No licence: never bake it in.** Mounted at `/models/watermark.pt`; a test checks the Dockerfile fetches nothing. mnemic's CC-BY-4.0 YOLOv8s lost the trial (15/32 vs 28/32 at 0.4, cortex#88) |
 
 ## Commands
@@ -88,7 +89,7 @@ make format    # ruff format + --fix
 - **Versioning is git-tag-derived** (`hatch-vcs`). Never hand-edit a version; `src/argus_retina/_version.py` is generated (gitignored). Tag `vX.Y.Z` to release.
 - **Branches:** feature PRs target `dev`; `main` moves only by merging `dev`.
 - `src/` layout, `py.typed`, Pydantic v2, `structlog`. Ruff line-length 120.
-- Detector images run CPU ONNX/torch unless they say otherwise. Keep `CUDA_VISIBLE_DEVICES=` on CPU images, so they never claim a GPU. SingGuard is the one GPU image: `Resident(device="gpu")`, the admin routes (`argus_cortex.auth.bearer`, so it installs argus-cortex), and a `gpu-tenant.yaml` resident with `unload_path`/`warm_path` (no `evict_path`: a 4-bit model has no CPU stage).
+- Detector images run CPU ONNX/torch unless they say otherwise. Keep `CUDA_VISIBLE_DEVICES=` on CPU images, so they never claim a GPU. SingGuard and faces are the GPU images: `Resident(device="gpu")`, the admin routes (`argus_cortex.auth.bearer`, so they install argus-cortex), and a `gpu-tenant.yaml` resident with `unload_path`/`warm_path` (no `evict_path`: neither has a CPU stage). Faces caps each ONNX CUDA arena (`FACES_GPU_MEM_LIMIT_MB`); the arena is not returned on unload, so iris stops the container.
 - SingGuard's caller text and policy go through `guard.neutralize` before the chat template: the tokenizer turns a written `<|im_end|>` into the control token, and the template writes turns as `[user]:` lines. Keep that for any new text field.
 
 ## CI / release

@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [nudenet, erax, watermark, ocr, singguard]
+        image: [nudenet, erax, watermark, ocr, singguard, faces]
     permissions:
       contents: read
       packages: write

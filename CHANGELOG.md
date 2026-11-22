@@ -5,6 +5,10 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+### Added
+
+- **Faces, phase 3 of argus-cortex#88 (#10): `ghcr.io/smk762/argus-retina-faces`.** `POST /faces` returns InsightFace `buffalo_l` boxes, ArcFace embeddings and pose, and MiVOLO age and gender. Clustering and the under-18 rule stay in the caller. The weights are mounted, not baked in (`buffalo_l` is not redistributed; the MiVOLO ONNX comes from `argus-curator mivolo-convert`). About 1 GB resident and 1.5 GB at peak. Each CUDA session's arena is capped (`FACES_GPU_MEM_LIMIT_MB`, default 1024). The resident is not pinned and asks to be dropped after 10 minutes idle; ONNX Runtime does not return the arena on unload, so iris should stop the container. `docker compose --profile gpu` starts it on `:8135`.
+
 ## [0.2.1] - 2026-11-22
 
 ### Fixed
