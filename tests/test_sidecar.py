@@ -7,6 +7,7 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -161,12 +162,13 @@ def test_a_model_that_fails_to_load_says_so():
 
 def test_busy_while_detecting_and_one_at_a_time():
     started, release = threading.Event(), threading.Event()
-    running = []
+    running, entered, overlap, results = [], [], [], []
 
     def load():
         def detect_all(images):
             running.append(1)
-            assert len(running) == 1  # never two at once
+            entered.append(images)
+            overlap.append(len(running))  # read in the test thread: a worker's assert would not fail the test
             started.set()
             release.wait(5)
             running.pop()
@@ -176,16 +178,27 @@ def test_busy_while_detecting_and_one_at_a_time():
 
     _, r = client(load)
     r.load()
-    t = threading.Thread(target=r.detect, args=([b"x"],))
+
+    def detect(images):
+        results.append(r.detect(images))
+
+    t = threading.Thread(target=detect, args=([b"x"],))
     t.start()
     assert started.wait(5)
     h = r.health()
     assert h["busy"] is True and h["idle_s"] is None
-    t2 = threading.Thread(target=r.detect, args=([b"y"],))
+    t2 = threading.Thread(target=detect, args=([b"y"],))
     t2.start()
+    deadline = time.monotonic() + 5
+    while r._busy < 2 and time.monotonic() < deadline:  # t2 was accepted and waits for the first call
+        time.sleep(0.001)
+    time.sleep(0.05)
+    assert r._busy == 2 and t2.is_alive() and entered == [[b"x"]]  # waiting, not detecting
     release.set()
     t.join(5)
     t2.join(5)
+    assert not t.is_alive() and not t2.is_alive()
+    assert entered == [[b"x"], [b"y"]] and max(overlap) == 1 and running == [] and len(results) == 2
     assert r.health()["busy"] is False
 
 
@@ -426,17 +439,41 @@ def test_concurrent_requests_take_one_lease_at_a_time():
     assert leases.held == [1, 1, 1, 1]  # Leases asserts none overlapped
 
 
-def test_a_refused_lease_is_a_503_and_a_failed_startup_load():
+def test_a_refused_lease_is_a_503_and_leaves_the_model_unloaded():
     leases, loads = Leases(refuse=TimeoutError("broker queue full")), []
     c, r = leased_client(leases, loads)
     r.load_leased()
-    assert r.state == "error" and "broker queue full" in r.error and loads == []
+    assert r.state == "unloaded" and "broker queue full" in r.error and loads == [] and r.ready
     leases.refuse = None
     assert c.post("/admin/wake").status_code == 200  # iris's wake still loads it
     leases.refuse = TimeoutError("broker queue full")
     resp = c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))])
     assert resp.status_code == 503 and "no GPU lease" in resp.json()["detail"]
     assert r.health()["busy"] is False
+
+
+def test_a_refused_startup_lease_loads_on_the_next_request():
+    leases, loads = Leases(refuse=TimeoutError("broker queue full")), []
+    c, r = leased_client(leases, loads)
+    r.load_leased()
+    leases.refuse = None  # argus-iris made room
+    assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 200
+    assert loads == [1] and r.state == "gpu" and r.error == ""
+
+
+def test_a_gpu_load_that_failed_on_demand_tries_again_on_the_next_request():
+    calls = []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("CUDA out of memory")
+        return lambda images: [[] for _ in images]
+
+    r = Resident("Guard", load, {}, device="gpu")
+    r.load()
+    assert r.state == "error"
+    assert r.detect([b"x"]) == [[]] and r.state == "gpu" and len(calls) == 2
 
 
 def test_an_error_inside_a_lease_is_not_a_lease_error():
