@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 import argus_retina
 from argus_retina import sidecar
-from argus_retina.sidecar import Resident, UnreadableImage, create_app, decode_bgr
+from argus_retina.sidecar import NotReady, Resident, UnreadableImage, create_app, decode_bgr
 
 
 def png(gray: bool = False) -> bytes:
@@ -249,6 +249,16 @@ def test_a_cpu_image_has_no_admin_routes():
     assert c.post("/admin/unload").status_code == 404
 
 
+def test_unloading_a_cpu_resident_leaves_it_servable():
+    # CPU images never unload. Doing it anyway used to drop the model and leave every request 503, because only a
+    # GPU resident loads again.
+    c, r = client(fake_loader([]))
+    r.load()
+    assert r.unload() is False
+    assert r.state == "cpu" and r._model is not None and r.ready
+    assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 200
+
+
 def test_a_gpu_resident_reports_gpu_and_its_memory():
     c, r = gpu_client()
     r.load()
@@ -273,6 +283,28 @@ def test_unload_frees_the_model_and_wake_loads_it_again():
     woke = ResidentActionReply.model_validate(c.post("/admin/wake").json())
     assert woke.model_state == "gpu" and woke.unloaded is None and loads == [1, 1]
     assert c.post("/admin/wake").status_code == 200 and loads == [1, 1]  # already loaded: nothing to do
+
+
+def test_a_release_failure_still_leaves_the_model_unloaded(caplog):
+    # release runs after the model is dropped (gc, empty_cache). It used to run before the state flipped, so a CUDA
+    # error left no model but state "gpu": ready, and every later request 503 until restart.
+    def boom():
+        raise RuntimeError("empty_cache failed")
+
+    loads = []
+
+    def load():
+        loads.append(1)
+        return lambda images: [[] for _ in images]
+
+    r = Resident("Guard", load, {"model": "m"}, device="gpu", release=boom)
+    r.load()
+    with caplog.at_level("ERROR"):
+        assert r.unload() is True
+    assert r._model is None and r.state == "unloaded" and r.ready
+    assert "empty_cache failed" in caplog.text
+    assert r.detect([b"x"]) == [[]]
+    assert loads == [1, 1] and r.state == "gpu"
 
 
 def test_an_unloaded_gpu_model_loads_on_the_next_request():
@@ -450,6 +482,29 @@ def test_a_refused_lease_is_a_503_and_leaves_the_model_unloaded():
     resp = c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))])
     assert resp.status_code == 503 and "no GPU lease" in resp.json()["detail"]
     assert r.health()["busy"] is False
+
+
+def test_a_refused_lease_during_a_request_keeps_the_reason():
+    # load_leased records a refused lease. A request's lease used to raise NotReady without touching self.error, so
+    # /health never said why an on-demand load was being refused.
+    leases, loads = Leases(), []
+    _, r = leased_client(leases, loads)
+    r.load_leased()
+    r.unload()
+    leases.refuse = TimeoutError("broker queue full")
+    with pytest.raises(NotReady, match="broker queue full"):
+        r.detect([b"x"])
+    assert r.state == "unloaded" and r._model is None and loads == [1]
+    assert "broker queue full" in r.error and "broker queue full" in r.health()["error"]
+    leases.refuse = None
+    assert r.detect([b"x"]) == [[]] and loads == [1, 1] and r.state == "gpu" and r.error == ""
+
+    leases.refuse = TimeoutError("broker queue full")
+    with pytest.raises(NotReady, match="broker queue full"):
+        r.detect([b"x"])
+    assert r.state == "gpu" and r._model is not None and "broker queue full" in r.health()["error"]
+    leases.refuse = None
+    assert r.detect([b"x"]) == [[]] and r.state == "gpu" and r.error == ""
 
 
 def test_a_refused_startup_lease_loads_on_the_next_request():
