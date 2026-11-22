@@ -156,6 +156,29 @@ def test_singguard_is_a_gpu_tenant_with_an_unload_and_wake_resident():
     assert res.evict_path is None  # no CPU stage: argus-iris unloads instead
 
 
+def test_faces_is_an_evictable_gpu_tenant_at_the_measured_footprint():
+    m = load_tenant_manifest(ROOT / "images" / "faces" / "gpu-tenant.yaml")
+    assert m.tenant == "argus-retina-faces" and m.repo == "smk762/argus-retina"
+    (kind,) = m.kinds
+    (res,) = m.residents
+    assert kind.kind == "faces" and kind.vram_mb == 1600 and kind.model_mb == res.vram_mb == 1000
+    assert res.pinned is False and res.idle_kill_s == 600
+    assert res.adapter == "argus-http" and res.admin_auth
+    assert (res.health_path, res.unload_path, res.warm_path) == ("/health", "/admin/unload", "/admin/wake")
+    assert res.evict_path is None  # no CPU stage, and the CUDA arena only goes when the container stops
+
+
+def test_the_faces_image_bakes_in_no_weights_and_runs_on_the_gpu():
+    # buffalo_l is not redistributable; MiVOLO's ONNX is mounted from curator's converter.
+    text = (ROOT / "images" / "faces" / "Dockerfile").read_text()
+    assert fetched_weights(text) == []
+    assert "argus_retina.faces:app" in text and "VOLUME /models/insightface" in text
+    assert "ARGUS_RETINA_COMMIT=${COMMIT}" in text and "USER retina" in text
+    assert "CUDA_VISIBLE_DEVICES=" not in text
+    assert "onnxruntime-gpu==1.20.2" in text
+    assert "images/faces/weights" in (ROOT / ".dockerignore").read_text()
+
+
 def test_the_singguard_image_bakes_in_no_weights_and_runs_its_module():
     # 8.9 GB: fetched at runtime into a volume and checked against singguard.FILES (argus-retina#9)
     text = (ROOT / "images" / "singguard" / "Dockerfile").read_text()

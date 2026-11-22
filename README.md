@@ -13,13 +13,14 @@ Part of the [Argus suite](https://github.com/smk762/argus-cortex/blob/dev/SUITE.
 | `ghcr.io/smk762/argus-retina-watermark` | Watermark detector, **no weights in the image**: mount fancyfeast's [YOLO11x](https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection) | none stated, so never redistributed | CPU (torch) |
 | `ghcr.io/smk762/argus-retina-ocr` | [RapidOCR](https://github.com/RapidAI/RapidOCR) with PaddleOCR's **PP-OCRv6 small** (multilingual Latin and CJK): text lines with boxes | Apache-2.0 | CPU (ONNX) |
 | `ghcr.io/smk762/argus-retina-singguard` | [SingGuard-4b](https://huggingface.co/inclusionAI/SingGuard-4b) (on Qwen3-VL-4B-Instruct): a policy verdict on an image, text, or both. **Weights fetched on first start**, not in the image | Apache-2.0 | GPU (transformers, 4-bit) |
+| `ghcr.io/smk762/argus-retina-faces` | [InsightFace](https://github.com/deepinsight/insightface) `buffalo_l` (detection, ArcFace embedding, pose) and [MiVOLO v2](https://huggingface.co/iitolstykh/mivolo_v2) age. **Weights mounted**, not in the image | `buffalo_l` non-commercial; MiVOLO Apache-2.0 | GPU (ONNX) |
 
-All listen on port 8080, run as a non-root user, and are healthy once their model has loaded. All but SingGuard never claim a GPU (`CUDA_VISIBLE_DEVICES` is empty).
+All listen on port 8080, run as a non-root user, and are healthy once their model has loaded. The CPU images never claim a GPU (`CUDA_VISIBLE_DEVICES` is empty). SingGuard and faces do.
 
 ```bash
 make watermark-weights        # the YOLO11x the watermark service mounts (pinned by Space commit and sha256)
 docker compose up -d          # on 127.0.0.1:8130 (nudenet), :8131 (erax), :8132 (watermark) and :8133 (ocr)
-docker compose --profile gpu up -d   # and SingGuard on :8134
+docker compose --profile gpu up -d   # SingGuard on :8134, faces on :8135
 ```
 
 ### SingGuard: one guard for the suite
@@ -50,6 +51,16 @@ echo 'd /tmp/argus-gpu 1777 root root -' | sudo tee /etc/tmpfiles.d/argus-gpu.co
 
 A refused lease is a `503` for that check, and the next check tries again.
 
+### Faces: detection, embedding, age
+
+`POST /faces` is phase 3 of [cortex#88](https://github.com/smk762/argus-cortex/issues/88) ([#10](https://github.com/smk762/argus-retina/issues/10)). It answers what InsightFace and MiVOLO see, and nothing about what to do with it: no clustering, no under-18 rule, no choice of which age wins. Those stay in curator. FairFace (race) and the person detector stay there too, for now.
+
+Multipart fields `f1`, `f2`, … come back as `{"schema": "argus-retina.faces/v1", "faces": [[...], ...], "success": true}`, one list per image. A face is `bbox` (`[x, y, w, h]`), `det_score`, `embedding` (ArcFace, L2-normalised), `kps` (five keypoints), `pose` (`yaw`, `pitch`, `roll` in degrees), `landmark_3d_68`, `eye_open`, `mouth_open`, and MiVOLO's `age_years`, `gender` (`male` or `female`) and `gender_score`. A missing reading is `null`. `400` without images, `422` for a file that isn't one, `503` while the model loads or a GPU lease is refused.
+
+The weights are not in the image. Mount InsightFace's `buffalo_l` pack at `/models/insightface` (so the ONNX files are in `models/buffalo_l/`) and the MiVOLO ONNX from `argus-curator mivolo-convert` at `/models/faces/mivolo_v2_d1_384.onnx`. Compose bind-mounts `images/faces/weights/insightface` and `images/faces/weights/mivolo_v2_d1_384.onnx`, or the paths `INSIGHTFACE_ROOT` and `MIVOLO_MODEL` name. `buffalo_l` is not redistributed. MiVOLO v2 is Apache-2.0; the file this image reads is the converted ONNX, not the Hub checkpoint.
+
+It holds about 1 GB once loaded and about 1.5 GB at peak (measured on a 3090, curator's arena cap). Each CUDA session grows its arena only by what an allocation asks, up to `FACES_GPU_MEM_LIMIT_MB` (1024). ONNX Runtime does not return that arena on `/admin/unload`, so argus-iris should stop the container to free the card (`evict_by: stop`). The manifest asks to be dropped after 10 minutes idle and is not pinned, so a large ComfyUI or LoRA lease on the same card can be admitted. The lease kind is `faces`, interactive, around the startup load and each request. `/admin/wake` takes none.
+
 ### OCR: what the image says
 
 The OCR image reads the text in an image so a caller can check what a caption claims it reads (argus-lens reconcile, [#5](https://github.com/smk762/argus-retina/issues/5)). It returns one detection per line of text, with the line in `text`, in reading order: rows top to bottom, then left to right. It reads rows, not columns, so two facing pages interleave. `score` is the recogniser's confidence; a line it can barely read (ornate script, Fraktur) has a low score rather than a cleaned-up guess. It reads what is printed, misspellings included. Words are sometimes run together (`afProfessor`), so a name check should compare without spaces.
@@ -72,7 +83,7 @@ The 640m file is NudeNet's own release asset (sha256 `04fe3d77…34eb`). GitHub 
 
 - `POST /infer`: multipart image fields `f1`, `f2`, …, answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, one list per image in field order. This is NudeNet's shape; EraX answers in it with its own classes (`anus`, `make_love`, `nipple`, `penis`, `vagina`), and the watermark detector with `watermark`. The OCR image answers with `text`, and each of its detections adds the line it read as a `text` field. `400` without images, `422` for a file that isn't an image, `503` while the model loads.
 - `GET /health`: argus-cortex's `ResidentHealth` (`model_state`: `loading`, `cpu`, `gpu`, `unloaded` or `error`; `busy`; `idle_s`; `gpu`, the memory figures, on SingGuard), plus `detector`, `device`, `model` (the weights file) and the model's settings (`resolution` for NudeNet, `conf`/`iou` for EraX, `conf`/`iou`/`imgsz` for watermark, `det`/`rec`/`min_score` for OCR, `revision`/`quant`/`force_thinking` for SingGuard), and `version` and `commit`: the source the image was built from.
-- SingGuard serves `POST /api/guard/check` instead of `/infer`, and the admin routes (above).
+- SingGuard serves `POST /api/guard/check` instead of `/infer`, and the admin routes (above). Faces serves `POST /faces` instead of `/infer`, and the same admin routes.
 
 Images decode every frame the same way (three-channel BGR, stored pixel order, no EXIF rotation), so boxes from different detectors compare.
 
@@ -88,7 +99,7 @@ nn.info().detector          # "640m"
 nn.check(image_bytes)       # detections, labels, exposed_score
 ```
 
-Settings, all optional: `NUDENET_RESOLUTION` (640), `ERAX_CONF` (0.2), `ERAX_IOU` (0.3), `WATERMARK_CONF` (0.2, a reporting floor below curator's own `min_conf`), `WATERMARK_IOU` (0.5), `WATERMARK_IMGSZ` (1024), `OCR_MIN_SCORE` (0.5: lines read with less confidence are dropped), `ARGUS_RETINA_MAX_PIXELS` (2**27: a larger image is a 422, refused from its header before it is decoded). SingGuard: `SINGGUARD_QUANT` (`4bit` or `bf16`), `SINGGUARD_MAX_NEW_TOKENS` (2048, the reasoning modes' budget), `SINGGUARD_MAX_NEW_TOKENS_FAST` (256), `SINGGUARD_FORCE_THINKING` (judge every check in one mode, whatever it asks for), `ARGUS_ADMIN_TOKEN`.
+Settings, all optional: `NUDENET_RESOLUTION` (640), `ERAX_CONF` (0.2), `ERAX_IOU` (0.3), `WATERMARK_CONF` (0.2, a reporting floor below curator's own `min_conf`), `WATERMARK_IOU` (0.5), `WATERMARK_IMGSZ` (1024), `OCR_MIN_SCORE` (0.5: lines read with less confidence are dropped), `ARGUS_RETINA_MAX_PIXELS` (2**27: a larger image is a 422, refused from its header before it is decoded). SingGuard: `SINGGUARD_QUANT` (`4bit` or `bf16`), `SINGGUARD_MAX_NEW_TOKENS` (2048, the reasoning modes' budget), `SINGGUARD_MAX_NEW_TOKENS_FAST` (256), `SINGGUARD_FORCE_THINKING` (judge every check in one mode, whatever it asks for), `ARGUS_ADMIN_TOKEN`. Faces: `FACES_PACK` (`buffalo_l`), `FACES_DET_THRESH` (0.5), `FACES_GPU_MEM_LIMIT_MB` (1024, per CUDA session).
 
 ## Licence
 
@@ -105,6 +116,6 @@ make lint
 make images    # fetch the baked-in weights and build the images locally (IMAGES=nudenet for one)
 ```
 
-Each model is a module (`argus_retina.nudenet`, `argus_retina.erax`, `argus_retina.watermark`, `argus_retina.ocr`, `argus_retina.singguard`, whose request and parsing are in `argus_retina.guard`) on the shared server in `argus_retina.sidecar`, with its Dockerfile, extra requirements and argus-iris `gpu-tenant.yaml` in `images/<model>/`. A release (`v*` tag) builds and pushes one image per model; nothing goes to PyPI.
+Each model is a module (`argus_retina.nudenet`, `argus_retina.erax`, `argus_retina.watermark`, `argus_retina.ocr`, `argus_retina.singguard`, whose request and parsing are in `argus_retina.guard`, `argus_retina.faces`) on the shared server in `argus_retina.sidecar`, with its Dockerfile, extra requirements and argus-iris `gpu-tenant.yaml` in `images/<model>/`. A release (`v*` tag) builds and pushes one image per model; nothing goes to PyPI.
 
 Versions come from git tags (`hatch-vcs`). Scaffolded from [`argus-pkg-template`](https://github.com/smk762/argus-pkg-template); run `copier update` to pull tooling changes, but keep the AGPL `LICENSE`, the licence fields in `pyproject.toml` and this repo's image workflows.
