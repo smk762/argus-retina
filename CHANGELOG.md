@@ -5,6 +5,8 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-22
+
 ### Added
 
 - **SingGuard, phase 2 of argus-cortex#88 (#9): `ghcr.io/smk762/argus-retina-singguard`**, one SingGuard-4b for the
@@ -22,11 +24,22 @@ section here becomes its GitHub Release notes, and the release fails before push
   `/admin/unload`, `/admin/evict` (an unload here) and `/admin/wake`, behind `ARGUS_ADMIN_TOKEN` when set, with `409`
   while a check runs. After an unload the next request loads the model again, and the HEALTHCHECK counts an unloaded
   GPU model as healthy. `images/singguard/gpu-tenant.yaml` declares the `guard` kind and the resident for argus-iris.
+- **GPU leases.** SingGuard takes a `guard` lease from argus-iris's broker (`argus_cortex.gpu`, the host's
+  `ARGUS_GPU_*` settings) around its startup load and around each check, including a reload after an unload, so iris
+  can make room first. `/admin/wake` takes none: iris calls it after making room. A lease that can't be had is a `503`.
 - `docker compose --profile gpu up -d` starts SingGuard on `:8134`.
 
 ### Changed
 
 - The `dev` extra needs `argus-cortex>=0.8` (`argus_cortex.auth`) and Pillow.
+
+### Fixed
+
+- **Audit findings (#14).** SingGuard reads the first line's verdict as a whole word after any `Safety:` label, so
+  `Safety: Unsafe` is unsafe and `safety concern` is no verdict (a prefix match on `safe` read both as safe). A reply
+  about an image with no prompt keeps its assistant role, with the image on a user turn of its own. A refused startup
+  lease leaves a GPU model unloaded rather than in `error`, and a GPU load that failed is tried again on the next
+  request, so a busy GPU at boot no longer means a 503 until iris wakes it.
 
 ### Security
 
