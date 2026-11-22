@@ -7,19 +7,21 @@
 # /models/faces/mivolo_v2_d1_384.onnx. Without them the server stays up, /health reports error, and the HEALTHCHECK fails.
 FROM python:3.12-slim
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 libglib2.0-0 libgl1 \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 COPY images/faces/requirements.txt /tmp/requirements.txt
-# insightface depends on the CPU onnxruntime, and that wheel shares its import name with onnxruntime-gpu. Install
-# the requirements, drop whichever wheel landed, then install the GPU build so a session cannot run on the CPU.
-RUN pip install --no-cache-dir --upgrade pip \
+# insightface 0.7.3 publishes no wheel, so this builds the sdist (it needs g++, dropped again afterwards). It also
+# depends on the CPU onnxruntime, which shares its import name with onnxruntime-gpu: drop whichever wheel landed,
+# then install the GPU build so a session cannot run on the CPU.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 libglib2.0-0 libgl1 g++ \
+    && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/requirements.txt \
     && (pip uninstall -y onnxruntime || true) \
     && (pip uninstall -y onnxruntime-gpu || true) \
-    && pip install --no-cache-dir onnxruntime-gpu==1.20.2
+    && pip install --no-cache-dir onnxruntime-gpu==1.20.2 \
+    && apt-get purge -y g++ \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 ARG VERSION=0.0.0+docker
 ARG COMMIT=
