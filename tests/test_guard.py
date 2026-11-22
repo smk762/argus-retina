@@ -112,7 +112,8 @@ def test_a_reply_about_an_image_puts_the_image_on_the_prompt_before_it():
 def test_a_reply_about_an_image_with_no_prompt_gets_a_user_turn_for_the_image():
     chat = messages("A dragon.", role="assistant", image=IMG)
     assert chat == [
-        {"role": "user", "content": [{"type": "image", "image": IMG}, {"type": "text", "text": "A dragon."}]}
+        {"role": "user", "content": [{"type": "image", "image": IMG}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "A dragon."}]},
     ]
 
 
@@ -304,3 +305,22 @@ def test_a_run_on_answer_and_a_shortened_heading_at_a_word_boundary_are_rules():
 def test_first_line_verdict():
     assert guard._first_line_verdict("") is None and guard._first_line_verdict("  \n\n") is None
     assert guard._first_line_verdict("\nunsafe\n<answer>x</answer>") is False
+
+
+@pytest.mark.parametrize(
+    ("line", "verdict"),
+    [
+        ("Safety: Unsafe", False),
+        ("safety:unsafe", False),
+        ("**Unsafe**", False),
+        ("Safe", True),
+        ("safe.", True),
+        ("Safety: Safe", True),
+        ("Verdict: safe", True),
+        ("safety concern detected", None),
+        ("safeguard triggered", None),
+        ("safely handled", None),
+    ],
+)
+def test_first_line_verdict_reads_a_whole_word_not_a_prefix(line, verdict):
+    assert guard._first_line_verdict(f"{line}\n[Step 1] Content Summary") is verdict

@@ -208,13 +208,17 @@ class Resident:
             raise NotReady(f"no GPU lease for {self.name}: {exc}") from exc
 
     def load_leased(self) -> None:
-        """``load`` under a GPU lease: the startup load. A lease that can't be had is reported like a failed load."""
+        """``load`` under a GPU lease: the startup load.
+
+        A lease that can't be had leaves the model unloaded, with the reason kept: the next request loads it under its
+        own lease, once argus-iris has made room.
+        """
         try:
             with self._leased():
                 self.load()
         except NotReady as exc:
             self.log.warning("%s", exc)
-            self.state, self.error = "error", str(exc)[:500]
+            self.state, self.error = "unloaded", str(exc)[:500]
 
     def start(self) -> threading.Thread:
         t = threading.Thread(target=self.load_leased, name=f"load-{self.name}", daemon=True)
@@ -224,13 +228,14 @@ class Resident:
     def run(self, work: Callable[[Any], Any]) -> Any:
         """``work(model)``, one call at a time. A GPU model unloaded by an admin loads again first.
 
-        Raises ``NotReady`` while the model is loading or failed to load.
+        Raises ``NotReady`` while the model is loading or failed to load. A GPU model that failed to load tries again
+        on each request (a lease or out-of-memory failure passes once argus-iris makes room); a CPU one does not.
         """
         with self._busy_lock:
             self._busy += 1
         try:
             with self._lock, self._leased():
-                if self._model is None and self.device == "gpu" and self.state == "unloaded":
+                if self._model is None and self.device == "gpu" and self.state in ("unloaded", "error"):
                     self.load()
                 model = self._model
                 if model is None:

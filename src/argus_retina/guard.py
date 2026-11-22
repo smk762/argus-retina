@@ -118,9 +118,10 @@ def messages(
 ) -> list[dict[str, Any]]:
     """The chat messages for one check: *conversation*'s turns, then *text* as *role*, every text neutralized.
 
-    The image sits on a user turn, so it is judged with the prompt beside it: the new turn when *role* is ``user`` or
-    no earlier turn is a user's, else the latest user turn in *conversation* (a model's reply about an image is judged
-    in the context of the prompt and the image). Raises ValueError for a check with nothing to judge.
+    The image sits on a user turn, so it is judged with the prompt beside it: the new turn when *role* is ``user``,
+    else the latest user turn in *conversation* (a model's reply about an image is judged in the context of the prompt
+    and the image), else a user turn of its own before the reply, which keeps its assistant role. Raises ValueError
+    for a check with nothing to judge.
     """
     if role not in ROLES:
         raise ValueError(f"input_role must be one of {', '.join(ROLES)}")
@@ -130,11 +131,15 @@ def messages(
             raise ValueError(f"conversation roles must be one of {', '.join(ROLES)}")
     has_user = any(r == "user" for r, _ in turns)
     image_at: int | None = None
-    if image is not None and (role == "user" or not has_user):
+    if image is not None and role == "user":
         turns.append(("user", text))
         image_at = len(turns) - 1
-    elif text.strip() or image is None:
-        turns.append((role, text))
+    else:
+        if image is not None and not has_user:  # a reply about an image with no prompt: the image on its own turn
+            turns.append(("user", ""))
+            image_at = len(turns) - 1
+        if text.strip() or image is None:
+            turns.append((role, text))
     if image is not None and image_at is None:
         image_at = max(i for i, (r, _) in enumerate(turns) if r == "user")
     if image is None and not any(c.strip() for _, c in turns):
@@ -197,16 +202,19 @@ class NoVerdict(ValueError):
     """The generation carried no verdict."""
 
 
+# The first line's verdict: the whole first word after any "Safety:" or "Verdict:" label, not a prefix of it.
+_FIRST_WORD = re.compile(r"[\W_]*(?:(?:safety|verdict)\s*:)?[\W_]*([a-z]+)")
+
+
 def _first_line_verdict(raw: str) -> bool | None:
     lines = raw.strip().splitlines()
     if not lines:
         return None
     first = lines[0].strip().lower()
-    if first.startswith("unsafe"):
+    if "unsafe" in first:  # anywhere on the line: "Safety: Unsafe" is not a pass
         return False
-    if first.startswith("safe"):
-        return True
-    return None
+    word = _FIRST_WORD.match(first)
+    return True if word and word.group(1) == "safe" else None  # "safety concern", "safeguard": no verdict
 
 
 def _late_judgment(raw: str) -> bool | None:
