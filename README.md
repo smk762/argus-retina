@@ -40,6 +40,16 @@ The weights (8.9 GB) are not in the image. On its first start the server fetches
 
 It holds VRAM, so argus-iris places it and can unload it: `POST /admin/unload` (and `/admin/evict`, the same here: a 4-bit model can't move to the CPU) and `/admin/wake`, behind `Authorization: Bearer $ARGUS_ADMIN_TOKEN` when that is set. While a check runs they answer `409`. After an unload the next check loads the model again.
 
+It takes a GPU lease around its startup load and each check (`ARGUS_GPU_COORDINATOR=broker` asks argus-iris; `none`, the compose default, takes none). When the broker can't be reached, the lease falls back to the host lock file in `ARGUS_GPU_LOCK_DIR` (`/tmp/argus-gpu`), shared with the suite's other GPU services. **SingGuard runs as a non-root user, so it can only create that lock file if the directory is writable.** Docker creates a missing bind-mount directory as root with mode 755, so create it first, world-writable and sticky. Once the file exists, cortex makes it `0666`, so every user can lock it:
+
+```bash
+sudo install -d -m 1777 /tmp/argus-gpu
+# survive reboots (/tmp is cleared):
+echo 'd /tmp/argus-gpu 1777 root root -' | sudo tee /etc/tmpfiles.d/argus-gpu.conf
+```
+
+A refused lease is a `503` for that check, and the next check tries again.
+
 ### OCR: what the image says
 
 The OCR image reads the text in an image so a caller can check what a caption claims it reads (argus-lens reconcile, [#5](https://github.com/smk762/argus-retina/issues/5)). It returns one detection per line of text, with the line in `text`, in reading order: rows top to bottom, then left to right. It reads rows, not columns, so two facing pages interleave. `score` is the recogniser's confidence; a line it can barely read (ornate script, Fraktur) has a low score rather than a cleaned-up guess. It reads what is printed, misspellings included. Words are sometimes run together (`afProfessor`), so a name check should compare without spaces.
