@@ -250,6 +250,13 @@ class Resident:
         return self.run(lambda detect: detect(images))
 
     @property
+    def accepting(self) -> bool:
+        """A request goes on to ``run``: the resident is ready, or it is a GPU model that failed to load, which ``run``
+        tries to load again (a busy GPU or an out-of-memory load passes once argus-iris makes room). ``ready`` stays
+        false for the latter, so the HEALTHCHECK still reports the failure."""
+        return self.ready or (self.device == "gpu" and self.state == "error")
+
+    @property
     def ready(self) -> bool:
         """A request would be served: the model is loaded, or (on a GPU image) unloaded and loads on demand."""
         return self.state in ("cpu", "gpu") or (self.device == "gpu" and self.state == "unloaded")
@@ -352,7 +359,7 @@ def create_app(resident: Resident, *, load: bool = True, infer: bool = True) -> 
 
         @app.post("/infer")
         async def infer_route(request: Request) -> dict[str, Any]:
-            if not resident.ready:
+            if not resident.accepting:
                 raise HTTPException(status_code=503, detail=f"{resident.name} is {resident.state}")
             async with request.form() as form:  # closes the spooled upload files
                 images = await form_images(form)

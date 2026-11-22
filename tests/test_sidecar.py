@@ -487,3 +487,27 @@ def test_an_error_inside_a_lease_is_not_a_lease_error():
     r.load()
     with pytest.raises(RuntimeError, match="model blew up"):
         r.detect([b"x"])
+
+
+def test_infer_on_a_gpu_resident_that_failed_to_load_tries_again():
+    calls = []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("CUDA out of memory")
+        return lambda images: [[] for _ in images]
+
+    r = Resident("Guard", load, {}, device="gpu")
+    c = TestClient(create_app(r, load=False))
+    r.load()
+    assert r.state == "error"
+    assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 200
+    assert r.state == "gpu" and len(calls) == 2
+
+
+def test_infer_on_a_cpu_resident_that_failed_to_load_stays_a_503():
+    r = Resident("NudeNet", lambda: (_ for _ in ()).throw(RuntimeError("weights missing")), {})
+    c = TestClient(create_app(r, load=False))
+    r.load()
+    assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 503

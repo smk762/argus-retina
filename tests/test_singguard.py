@@ -9,6 +9,7 @@ import base64
 import contextlib
 import hashlib
 import io
+import os
 import sys
 import types
 
@@ -257,3 +258,56 @@ def test_the_lease_footprint_is_the_manifests_and_comes_from_the_hosts_coordinat
             "priority": "interactive",
         }
     ]
+
+
+def test_a_check_after_a_failed_gpu_load_tries_the_load_again(monkeypatch):
+    """argus-retina#20: an out-of-memory load left the resident in error, and the route refused before run() retried."""
+    fake, calls = FakeGuard({"fast": SAFE}), []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("CUDA out of memory")
+        return fake
+
+    r = Resident("SingGuard", load, {"model": singguard.MODEL_ID}, device="gpu")
+    monkeypatch.setattr(singguard, "resident", r)
+    monkeypatch.setattr(singguard, "FORCE_THINKING", None)
+    app = create_app(r, load=False, infer=False)
+    app.add_api_route("/api/guard/check", singguard.check, methods=["POST"])
+    r.load()
+    assert r.state == "error" and not r.ready  # the HEALTHCHECK still says so
+    c = TestClient(app)
+    assert c.post("/api/guard/check", json={"image_base64": png()}).json()["safe"] is True
+    assert r.state == "gpu" and len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("env", "warned"),
+    [
+        ({}, False),  # no coordinator: no leases at all
+        ({"ARGUS_GPU_COORDINATOR": "broker", "ARGUS_GPU_BROKER_FALLBACK": "none"}, False),
+        ({"ARGUS_GPU_COORDINATOR": "broker"}, True),
+        ({"ARGUS_GPU_COORDINATOR": "lease"}, True),
+    ],
+)
+def test_an_unwritable_lock_dir_is_named_at_startup(tmp_path, env, warned):
+    locked = tmp_path / "root-owned"
+    locked.mkdir()
+    locked.chmod(0o555)  # what Docker leaves for a non-root user: no writing
+    try:
+        if os.access(locked, os.W_OK):
+            pytest.skip("running as root: every directory is writable")
+        warning = singguard.lock_warning({**env, "ARGUS_GPU_LEASE_PATH": str(locked / "argus-gpu.lock")})
+        assert (warning is not None) is warned
+        if warned:
+            assert str(locked / "argus-gpu.lock") in warning and "1777" in warning
+    finally:
+        locked.chmod(0o755)
+
+
+def test_a_writable_lock_dir_or_an_existing_lock_file_is_fine(tmp_path):
+    env = {"ARGUS_GPU_COORDINATOR": "lease", "ARGUS_GPU_LEASE_PATH": str(tmp_path / "argus-gpu.lock")}
+    assert singguard.lock_warning(env) is None
+    (tmp_path / "argus-gpu.lock").touch(mode=0o666)
+    assert singguard.lock_warning(env) is None

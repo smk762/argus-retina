@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -205,6 +206,37 @@ def lease() -> Any:
     )
 
 
+def lock_warning(env: Mapping[str, str] = os.environ) -> str | None:
+    """Why the GPU lease's lock-file fallback would fail here, or None.
+
+    The image runs as a non-root user, and Docker creates a missing bind-mount directory as root, mode 755, so the
+    first lease that falls back to the host lock (the broker unreachable, say after a reboot) is refused. Said once
+    at startup, naming the path, rather than only in the 503 of a later check (argus-retina#20).
+    """
+    coordinator = env.get("ARGUS_GPU_COORDINATOR", "").strip().lower()
+    fallback = env.get("ARGUS_GPU_BROKER_FALLBACK", "lease").strip().lower() or "lease"
+    if coordinator != "lease" and not (coordinator == "broker" and fallback == "lease"):
+        return None
+    path = env.get("ARGUS_GPU_LEASE_PATH", "").strip()
+    if not path:
+        from argus_cortex.gpu import default_lock_path  # noqa: PLC0415 - in the singguard image
+
+        path = default_lock_path()
+    lock = Path(path)
+    if lock.exists():
+        if os.access(lock, os.R_OK | os.W_OK):
+            return None
+        problem = "can't be opened"
+    elif os.access(lock.parent, os.W_OK | os.X_OK):
+        return None
+    else:
+        problem = "can't be created (its directory isn't writable)"
+    return (
+        f"the GPU lease lock {lock} {problem} by uid {os.getuid()}, so a lease that falls back to it will be refused: "
+        "make the host's ARGUS_GPU_LOCK_DIR mode 1777 (see the README)"
+    )
+
+
 def release() -> None:
     """After an unload: collect the dropped model, then hand its cached blocks back to the driver.
 
@@ -289,7 +321,7 @@ def cascade(g: Guard, chat: list[dict[str, Any]], policy: str | None) -> dict[st
 def check(body: CheckRequest) -> dict[str, Any]:
     if body.thinking not in guard.THINKING:
         raise HTTPException(status_code=400, detail=f"thinking must be one of {', '.join(guard.THINKING)}")
-    if not resident.ready:
+    if not resident.accepting:  # a failed GPU load is tried again in run()
         raise HTTPException(status_code=503, detail=f"{resident.name} is {resident.state}")
     thinking = FORCE_THINKING or body.thinking
     try:
@@ -325,6 +357,8 @@ resident = Resident(
     lease=lease,
 )
 configure_logging()
+if (_lock_problem := lock_warning()) is not None:
+    resident.log.warning("%s", _lock_problem)
 app = create_app(resident, infer=False)
 # A sync route: FastAPI runs it on the threadpool, so a generation never blocks /health on the event loop.
 app.add_api_route("/api/guard/check", check, methods=["POST"])
