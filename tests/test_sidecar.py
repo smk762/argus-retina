@@ -7,11 +7,12 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 
 import cv2
 import numpy as np
 import pytest
-from argus_cortex.gpu_wire import ResidentHealth
+from argus_cortex.gpu_wire import ResidentActionReply, ResidentBusyReply, ResidentHealth
 from argus_cortex.moderation.nudenet import NudeNetInfo
 from fastapi.testclient import TestClient
 
@@ -161,12 +162,13 @@ def test_a_model_that_fails_to_load_says_so():
 
 def test_busy_while_detecting_and_one_at_a_time():
     started, release = threading.Event(), threading.Event()
-    running = []
+    running, entered, overlap, results = [], [], [], []
 
     def load():
         def detect_all(images):
             running.append(1)
-            assert len(running) == 1  # never two at once
+            entered.append(images)
+            overlap.append(len(running))  # read in the test thread: a worker's assert would not fail the test
             started.set()
             release.wait(5)
             running.pop()
@@ -176,16 +178,27 @@ def test_busy_while_detecting_and_one_at_a_time():
 
     _, r = client(load)
     r.load()
-    t = threading.Thread(target=r.detect, args=([b"x"],))
+
+    def detect(images):
+        results.append(r.detect(images))
+
+    t = threading.Thread(target=detect, args=([b"x"],))
     t.start()
     assert started.wait(5)
     h = r.health()
     assert h["busy"] is True and h["idle_s"] is None
-    t2 = threading.Thread(target=r.detect, args=([b"y"],))
+    t2 = threading.Thread(target=detect, args=([b"y"],))
     t2.start()
+    deadline = time.monotonic() + 5
+    while r._busy < 2 and time.monotonic() < deadline:  # t2 was accepted and waits for the first call
+        time.sleep(0.001)
+    time.sleep(0.05)
+    assert r._busy == 2 and t2.is_alive() and entered == [[b"x"]]  # waiting, not detecting
     release.set()
     t.join(5)
     t2.join(5)
+    assert not t.is_alive() and not t2.is_alive()
+    assert entered == [[b"x"], [b"y"]] and max(overlap) == 1 and running == [] and len(results) == 2
     assert r.health()["busy"] is False
 
 
@@ -213,3 +226,264 @@ def test_the_image_modules_import_without_their_detector(module, monkeypatch, tm
     monkeypatch.setattr(mod, "DET" if module.endswith(".ocr") else "MODEL", tmp_path / "missing.onnx")
     with pytest.raises(FileNotFoundError):
         mod.load()
+
+
+# --- GPU residents: the admin routes ---------------------------------------------------------------------------------
+
+
+def gpu_client(loader=None, *, released=None):
+    r = Resident(
+        "Guard",
+        loader or (lambda: lambda images: [[] for _ in images]),
+        {"model": "m"},
+        device="gpu",
+        release=(lambda: released.append(1)) if released is not None else None,
+        memory=lambda: {"free_vram_mb": 1000.0, "total_mb": 8000.0},
+    )
+    return TestClient(create_app(r, load=False)), r
+
+
+def test_a_cpu_image_has_no_admin_routes():
+    c, r = client(fake_loader([]))
+    r.load()
+    assert c.post("/admin/unload").status_code == 404
+
+
+def test_a_gpu_resident_reports_gpu_and_its_memory():
+    c, r = gpu_client()
+    r.load()
+    h = ResidentHealth.model_validate(c.get("/health").json())
+    assert h.model_state == "gpu" and h.on_gpu and h.gpu is not None and h.gpu.total_mb == 8000
+    assert c.get("/health").json()["device"] == "gpu"
+
+
+def test_unload_frees_the_model_and_wake_loads_it_again():
+    loads, released = [], []
+
+    def load():
+        loads.append(1)
+        return lambda images: [[] for _ in images]
+
+    c, r = gpu_client(load, released=released)
+    r.load()
+    reply = ResidentActionReply.model_validate(c.post("/admin/unload").json())
+    assert reply.model_state == "unloaded" and reply.unloaded is True and released == [1]
+    again = ResidentActionReply.model_validate(c.post("/admin/evict").json())  # evict is an unload here
+    assert again.unloaded is False and released == [1]
+    woke = ResidentActionReply.model_validate(c.post("/admin/wake").json())
+    assert woke.model_state == "gpu" and woke.unloaded is None and loads == [1, 1]
+    assert c.post("/admin/wake").status_code == 200 and loads == [1, 1]  # already loaded: nothing to do
+
+
+def test_an_unloaded_gpu_model_loads_on_the_next_request():
+    loads = []
+
+    def load():
+        loads.append(1)
+        return lambda images: [[{"class": "x", "score": 1.0, "box": [0, 0, 1, 1]}] for _ in images]
+
+    c, r = gpu_client(load)
+    r.load()
+    r.unload()
+    assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 200
+    assert loads == [1, 1] and r.state == "gpu"
+
+
+def test_unload_while_busy_is_a_409_and_does_nothing():
+    started, release = threading.Event(), threading.Event()
+
+    def load():
+        def detect_all(images):
+            started.set()
+            release.wait(5)
+            return [[] for _ in images]
+
+        return detect_all
+
+    c, r = gpu_client(load)
+    r.load()
+    t = threading.Thread(target=r.detect, args=([b"x"],))
+    t.start()
+    assert started.wait(5)
+    try:
+        resp = c.post("/admin/unload")
+        assert resp.status_code == 409
+        busy = ResidentBusyReply.model_validate(resp.json())
+        assert busy.active == 1 and r.state == "gpu"
+    finally:
+        release.set()
+        t.join(5)
+    assert c.post("/admin/unload").status_code == 200
+
+
+def test_admin_routes_while_loading_or_failed_are_503():
+    gate = threading.Event()
+
+    def slow_load():
+        gate.wait(5)
+        raise RuntimeError("CUDA out of memory")
+
+    c, r = gpu_client(slow_load)
+    t = r.start()
+    try:
+        while r.state != "loading":
+            pass
+        assert c.post("/admin/unload").status_code == 503
+        assert c.post("/admin/wake").status_code == 503
+    finally:
+        gate.set()
+        t.join(5)
+    assert r.state == "error"
+    resp = c.post("/admin/wake")  # tries again, and says why it failed
+    assert resp.status_code == 503 and "out of memory" in resp.json()["detail"]
+
+
+def test_admin_routes_need_the_token_when_one_is_set(monkeypatch):
+    c, r = gpu_client()
+    r.load()
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", "s3cret")
+    assert c.post("/admin/unload").status_code == 401
+    assert c.post("/admin/unload", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert c.post("/admin/unload", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("body", "healthy"),
+    [
+        ({"model_state": "gpu"}, True),
+        ({"model_state": "cpu"}, True),
+        ({"model_state": "unloaded", "device": "gpu"}, True),  # argus-iris freed it; the next request loads it
+        ({"model_state": "unloaded", "device": "cpu"}, False),
+        ({"model_state": "loading"}, False),
+        ({"model_state": "error"}, False),
+        ([], False),
+    ],
+)
+def test_the_healthcheck(body, healthy, monkeypatch):
+    import io
+    import json
+
+    from argus_retina import healthcheck
+
+    monkeypatch.setattr(healthcheck.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(json.dumps(body).encode()))
+    assert healthcheck.main() == (0 if healthy else 1)
+
+
+# --- GPU leases --------------------------------------------------------------------------------------------------------
+
+
+class Leases:
+    """Records each lease and what was running under it."""
+
+    def __init__(self, refuse: Exception | None = None):
+        self.held: list[str] = []
+        self.active = 0
+        self.refuse = refuse
+
+    def __call__(self):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def lease():
+            if self.refuse is not None:
+                raise self.refuse
+            self.active += 1
+            assert self.active == 1  # never two at once: the lease is taken inside the resident's lock
+            try:
+                yield
+            finally:
+                self.active -= 1
+
+        return lease()
+
+
+def leased_client(leases, loads):
+    """A GPU resident under *leases*. *loads* and ``leases.held`` record whether a lease was held at each load and
+    each detect."""
+
+    def detect_all(images):
+        leases.held.append(leases.active)
+        return [[] for _ in images]
+
+    def load():
+        loads.append(leases.active)
+        return detect_all
+
+    r = Resident("Guard", load, {"model": "m"}, device="gpu", lease=leases)
+    return TestClient(create_app(r, load=False)), r
+
+
+def test_the_startup_load_and_each_request_hold_a_lease_and_wake_does_not():
+    leases, loads = Leases(), []
+    c, r = leased_client(leases, loads)
+    r.load_leased()
+    assert loads == [1] and r.state == "gpu"
+    files = [("f1", ("a.png", png(), "image/png"))]
+    assert c.post("/infer", files=files).status_code == 200 and leases.held == [1]
+    r.unload()
+    assert c.post("/infer", files=files).status_code == 200  # reloads under the request's lease
+    assert loads == [1, 1] and leases.held == [1, 1]
+    r.unload()
+    assert c.post("/admin/wake").status_code == 200 and loads == [1, 1, 0]  # argus-iris made room: no lease
+
+
+def test_concurrent_requests_take_one_lease_at_a_time():
+    leases, loads = Leases(), []
+    _, r = leased_client(leases, loads)
+    r.load_leased()
+    threads = [threading.Thread(target=r.detect, args=([b"x"],)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert leases.held == [1, 1, 1, 1]  # Leases asserts none overlapped
+
+
+def test_a_refused_lease_is_a_503_and_leaves_the_model_unloaded():
+    leases, loads = Leases(refuse=TimeoutError("broker queue full")), []
+    c, r = leased_client(leases, loads)
+    r.load_leased()
+    assert r.state == "unloaded" and "broker queue full" in r.error and loads == [] and r.ready
+    leases.refuse = None
+    assert c.post("/admin/wake").status_code == 200  # iris's wake still loads it
+    leases.refuse = TimeoutError("broker queue full")
+    resp = c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))])
+    assert resp.status_code == 503 and "no GPU lease" in resp.json()["detail"]
+    assert r.health()["busy"] is False
+
+
+def test_a_refused_startup_lease_loads_on_the_next_request():
+    leases, loads = Leases(refuse=TimeoutError("broker queue full")), []
+    c, r = leased_client(leases, loads)
+    r.load_leased()
+    leases.refuse = None  # argus-iris made room
+    assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 200
+    assert loads == [1] and r.state == "gpu" and r.error == ""
+
+
+def test_a_gpu_load_that_failed_on_demand_tries_again_on_the_next_request():
+    calls = []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("CUDA out of memory")
+        return lambda images: [[] for _ in images]
+
+    r = Resident("Guard", load, {}, device="gpu")
+    r.load()
+    assert r.state == "error"
+    assert r.detect([b"x"]) == [[]] and r.state == "gpu" and len(calls) == 2
+
+
+def test_an_error_inside_a_lease_is_not_a_lease_error():
+    def load():
+        def detect_all(images):
+            raise RuntimeError("model blew up")
+
+        return detect_all
+
+    r = Resident("Guard", load, {}, device="gpu", lease=Leases())
+    r.load()
+    with pytest.raises(RuntimeError, match="model blew up"):
+        r.detect([b"x"])

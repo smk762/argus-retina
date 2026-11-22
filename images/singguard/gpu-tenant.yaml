@@ -1,0 +1,28 @@
+# argus-iris tenant manifest for argus-retina-singguard. Validated by argus-cortex's TenantManifest
+# (gpu-tenant-schema.json) in tests/test_images.py.
+#
+# The only GPU tenant among retina's images. SingGuard-4b in 4-bit bitsandbytes (SINGGUARD_QUANT=4bit, the default);
+# bf16 needs about 9 GB more of headroom: raise vram_mb and model_mb if a deployment sets it. The figures are estimates
+# until the first deployment measures them (composer's Q4_K_M GGUF of the same model loads at 3934 MiB).
+tenant_version: "1.0"
+tenant: argus-retina-singguard
+description: SingGuard-4b content checks (images, text, or both) for the suite's stages over HTTP.
+repo: smk762/argus-retina
+kinds:
+  # POST /api/guard/check: one lease covers both passes of a cascade.
+  - kind: guard
+    description: A SingGuard content check (cull scans, darkroom pre-flights, prompt and reply checks).
+    vram_mb: 6000                 # weights plus a 1536 px image and a 2048-token write-up
+    model_mb: 3600                # stays loaded between checks
+    priority: interactive
+residents:
+  # Evict would be an unload (a 4-bit model can't move to the CPU), so only unload and warm are declared.
+  # base_url and container are the deployment's: set them in the broker's config.
+  - name: singguard
+    adapter: argus-http
+    vram_mb: 3600
+    pinned: true                  # content checks for cull scans and darkroom pre-flights
+    health_path: /health
+    unload_path: /admin/unload
+    warm_path: /admin/wake
+    admin_auth: true

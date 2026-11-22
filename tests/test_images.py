@@ -143,3 +143,35 @@ def test_yolo_detections_are_nudenet_shaped():
         SimpleNamespace(names={}, boxes=None),
     ]
     assert boxes(results) == [{"class": "nipple", "score": 0.875, "box": [10, 20, 40, 59]}]
+
+
+def test_singguard_is_a_gpu_tenant_with_an_unload_and_wake_resident():
+    m = load_tenant_manifest(ROOT / "images" / "singguard" / "gpu-tenant.yaml")
+    assert m.tenant == "argus-retina-singguard" and m.repo == "smk762/argus-retina"
+    (kind,) = m.kinds
+    (res,) = m.residents
+    assert kind.kind == "guard" and kind.vram_mb > 0 and kind.model_mb == res.vram_mb
+    assert res.adapter == "argus-http" and res.admin_auth
+    assert (res.health_path, res.unload_path, res.warm_path) == ("/health", "/admin/unload", "/admin/wake")
+    assert res.evict_path is None  # no CPU stage: argus-iris unloads instead
+
+
+def test_the_singguard_image_bakes_in_no_weights_and_runs_its_module():
+    # 8.9 GB: fetched at runtime into a volume and checked against singguard.FILES (argus-retina#9)
+    text = (ROOT / "images" / "singguard" / "Dockerfile").read_text()
+    assert fetched_weights(text) == []
+    assert "argus_retina.singguard:app" in text and "VOLUME /models/singguard" in text
+    assert "ARGUS_RETINA_COMMIT=${COMMIT}" in text and "USER retina" in text
+    assert "CUDA_VISIBLE_DEVICES=" not in text  # the one image that takes a GPU
+    assert "HOME=/tmp" in text  # the user has no home, and Triton writes its cache there
+    assert re.search(r"torch==[\d.]+ torchvision==[\d.]+ --index-url https://download\.pytorch\.org/whl/cu\d+", text)
+
+
+def test_every_image_is_built_by_ci_released_and_in_the_makefile():
+    images = {p.name for p in (ROOT / "images").iterdir() if (p / "Dockerfile").is_file()}
+    for workflow in ("ci.yml", "release.yml"):
+        text = (ROOT / ".github" / "workflows" / workflow).read_text()
+        (matrix,) = re.findall(r"image: \[(.*)\]", text)
+        assert {name.strip() for name in matrix.split(",")} == images, workflow
+    (listed,) = re.findall(r"^IMAGES \?= (.*)$", (ROOT / "Makefile").read_text(), re.MULTILINE)
+    assert set(listed.split()) == images

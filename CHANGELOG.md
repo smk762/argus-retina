@@ -5,6 +5,49 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-22
+
+### Added
+
+- **SingGuard, phase 2 of argus-cortex#88 (#9): `ghcr.io/smk762/argus-retina-singguard`**, one SingGuard-4b for the
+  suite in place of argus-cull's `singguard/` service and agent-composer's guard route. `POST /api/guard/check` takes
+  what `argus_cortex.moderation.SingGuardClient` sends, so callers change only a URL: image checks, text-only checks
+  (`input_role`), and agent-composer's `conversation`; `thinking` is `fast`, `fast-slow`, `slow` or `cascade`, as cull
+  served them. Moved from cull: the parsing (an unreadable `<answer>` is unsafe with no rule; no verdict is a `500`,
+  never a pass) and slow's prefilled first step. From composer: control tokens and `[role]:` markers in the caller's
+  text and policy are made plain, so they can't forge a verdict or a turn. Images are shrunk to 1536 px first.
+- **The weights are fetched, not baked in.** SingGuard-4b and its base are Apache-2.0, but 8.9 GB: the first start
+  downloads them at a pinned Hub commit into the `/models/singguard` volume and checks every file's sha256; later
+  starts need no network. 4-bit bitsandbytes by default (about 3.5 GB of VRAM), `SINGGUARD_QUANT=bf16` for full
+  precision.
+- **GPU residents.** `Resident(device="gpu")` reports `gpu` and its memory on `/health` and serves argus-cortex's
+  `/admin/unload`, `/admin/evict` (an unload here) and `/admin/wake`, behind `ARGUS_ADMIN_TOKEN` when set, with `409`
+  while a check runs. After an unload the next request loads the model again, and the HEALTHCHECK counts an unloaded
+  GPU model as healthy. `images/singguard/gpu-tenant.yaml` declares the `guard` kind and the resident for argus-iris.
+- **GPU leases.** SingGuard takes a `guard` lease from argus-iris's broker (`argus_cortex.gpu`, the host's
+  `ARGUS_GPU_*` settings) around its startup load and around each check, including a reload after an unload, so iris
+  can make room first. `/admin/wake` takes none: iris calls it after making room. A lease that can't be had is a `503`.
+- `docker compose --profile gpu up -d` starts SingGuard on `:8134`.
+
+### Changed
+
+- The `dev` extra needs `argus-cortex>=0.8` (`argus_cortex.auth`) and Pillow.
+
+### Fixed
+
+- **Audit findings (#14).** SingGuard reads the first line's verdict as a whole word after any `Safety:` label, so
+  `Safety: Unsafe` is unsafe and `safety concern` is no verdict (a prefix match on `safe` read both as safe). A reply
+  about an image with no prompt keeps its assistant role, with the image on a user turn of its own. A refused startup
+  lease leaves a GPU model unloaded rather than in `error`, and a GPU load that failed is tried again on the next
+  request, so a busy GPU at boot no longer means a 503 until iris wakes it.
+
+### Security
+
+- SingGuard's image moves to transformers 5.22.2, accelerate 1.15.0 and Pillow 13.0.0, clearing the 66 Dependabot
+  alerts on `images/singguard/requirements.txt` (Pillow decoder overflows and decompression-bomb bypasses,
+  transformers and accelerate path traversal and code-execution advisories). Checked on a 3090 against the pinned
+  weights: it loads in 4-bit, every thinking mode gives the expected verdicts, and unload and wake work.
+
 ## [0.1.1] - 2026-11-19
 
 ### Fixed

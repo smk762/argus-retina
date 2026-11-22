@@ -2,6 +2,7 @@
 # (the servers have no auth: keep them on a trusted network).
 #   docker compose up -d                      # the released images
 #   docker compose build && docker compose up -d   # from source, after `make weights`
+#   docker compose --profile gpu up -d        # SingGuard too (the one GPU image)
 
 services:
   nudenet:
@@ -50,3 +51,36 @@ services:
     restart: unless-stopped
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${OCR_PORT:-8133}:8080"
+
+  singguard:
+    # The one GPU image, so it starts only with `docker compose --profile gpu up -d`. No weights in the image: the
+    # first start fetches SingGuard-4b (8.9 GB) into the volume and checks every file's sha256; later starts reuse it.
+    # Set ARGUS_ADMIN_TOKEN so only argus-iris can unload it.
+    image: ghcr.io/smk762/argus-retina-singguard:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/singguard/Dockerfile
+    profiles: ["gpu"]
+    restart: unless-stopped
+    environment:
+      - SINGGUARD_QUANT=${SINGGUARD_QUANT:-4bit}
+      - SINGGUARD_FORCE_THINKING=${SINGGUARD_FORCE_THINKING:-}
+      - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
+      # GPU leases (argus_cortex.gpu): the host's settings, as the suite's other GPU stages take them. Unset is none.
+      # broker asks argus-iris (ARGUS_GPU_BROKER_URL and _TOKEN), falling back to a host lock at ARGUS_GPU_LEASE_PATH.
+      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-none}
+      - ARGUS_GPU_BROKER_URL=${ARGUS_GPU_BROKER_URL:-}
+      - ARGUS_GPU_BROKER_TOKEN=${ARGUS_GPU_BROKER_TOKEN:-}
+      - ARGUS_GPU_BROKER_FALLBACK=${ARGUS_GPU_BROKER_FALLBACK:-lease}
+      - ARGUS_GPU_LEASE_PATH=/run/argus-gpu/argus-gpu.lock
+      - ARGUS_GPU_LEASE_TIMEOUT_S=${ARGUS_GPU_LEASE_TIMEOUT_S:-300}
+    volumes:
+      - singguard_weights:/models/singguard
+      # The host lock every argus GPU service shares, for when the broker can't be reached.
+      - ${ARGUS_GPU_LOCK_DIR:-/tmp/argus-gpu}:/run/argus-gpu
+    gpus: all
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${SINGGUARD_PORT:-8134}:8080"
+
+volumes:
+  singguard_weights:
