@@ -28,6 +28,13 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 - The `dev` extra needs `argus-cortex>=0.8` (`argus_cortex.auth`) and Pillow.
 
+### Security
+
+- SingGuard's image moves to transformers 5.22.2, accelerate 1.15.0 and Pillow 13.0.0, clearing the 66 Dependabot
+  alerts on `images/singguard/requirements.txt` (Pillow decoder overflows and decompression-bomb bypasses,
+  transformers and accelerate path traversal and code-execution advisories). Checked on a 3090 against the pinned
+  weights: it loads in 4-bit, every thinking mode gives the expected verdicts, and unload and wake work.
+
 ## [0.1.1] - 2026-11-19
 
 ### Fixed
