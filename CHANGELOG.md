@@ -5,6 +5,16 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+### Fixed
+
+- **A GPU model that failed to load tries again on the next request (#20).** `/api/guard/check` and `/infer` refused
+  with a `503` whenever the resident wasn't `ready`, so an out-of-memory load on a GPU image stayed in `error` until
+  `/admin/wake` or a restart, even though `run()` retries it. They now let a GPU resident in `error` through to
+  `run()` (`Resident.accepting`); `ready`, and with it the HEALTHCHECK, still reports the failure. A CPU image that
+  failed to load stays a `503`.
+- SingGuard logs a warning at startup when the GPU lease's lock-file fallback would be refused (the lock file can't
+  be created or opened by the image's non-root user), naming the path, instead of only failing a check later.
+
 ## [0.2.0] - 2026-11-22
 
 ### Added
