@@ -5,10 +5,23 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+### Added
+
+- **`/health` is also argus-cortex's `ServiceHealth`** (argus-cortex#212, #209), on every image, served by `argus_cortex.service.install_health`. New fields: `service_version`, `service` (`argus-retina`), `status`, `started_at`, `wire` (`resident_version`), `capabilities`, `checks`, `read_only`, `build` (the source commit) and `peer` (`ARGUS_PEER`). Every field it had is still there with the same value, and it still answers `200` in every state. `status` is `ok` when a request would be served and `degraded` while the model loads or after it failed to (the `model` check gives the state); `starting` and its `503` are not used, because argus-iris and `NudeNetClient.info()` read the body while the model loads.
+- **Discovery labels in `compose.yaml`.** Each container carries `argus.peer` (`nudenet`, `erax`, `watermark`, `ocr`, `synthetic`, `c2pa`, `singguard`, `faces`), `argus.service: argus-retina`, `argus.health: /health` and `argus.port: "8080"`, and `ARGUS_PEER` in its environment, so argus-iris can list it in the suite's directory.
+- **The suite file.** SingGuard and faces read `ARGUS_GPU_BROKER_URL`, `ARGUS_GPU_BROKER_TOKEN` and `ARGUS_ADMIN_TOKEN` from `/etc/argus/suite.env` when the container's environment leaves them unset (argus-cortex's `settings`), and the lock-file warning at startup reads it too. The mount is a commented-out line in `compose.yaml`: compose has no optional bind mount, and the non-root image needs a root-owned, mode 444 copy.
+
+### Changed
+
+- **argus-cortex 0.16**: the GPU images pin `argus-cortex[remote,gpu,yaml]==0.16.0` (was 0.15.0) and the package `>=0.16,<0.17`. **The CPU images now install argus-cortex too** (through the `server` extra, no extras of its own: pydantic only), for the health route.
+
 ## [0.3.0] - 2026-11-23
 
 ### Added
 
+- **Faces, phase 3 of argus-cortex#88 (#10): `ghcr.io/smk762/argus-retina-faces`.** `POST /faces` returns InsightFace `buffalo_l` boxes, ArcFace embeddings and pose, and MiVOLO age and gender. Clustering and the under-18 rule stay in the caller. The weights are mounted, not baked in (`buffalo_l` is not redistributed; the MiVOLO ONNX comes from `argus-curator mivolo-convert`). The image ships CUDA 12 and cuDNN 9 (NVIDIA's pip wheels), so it needs an NVIDIA driver for CUDA 12 (525 or newer); if a session can't get the CUDA provider, the load fails instead of running on the CPU. About 1 GB resident and 1.5 GB at peak. Each CUDA session's arena is capped (`FACES_GPU_MEM_LIMIT_MB`, default 1024). The resident is not pinned and asks to be dropped after 10 minutes idle; ONNX Runtime does not return the arena on unload, so iris should stop the container. `docker compose --profile gpu` starts it on `:8135`.
+- **Synthetic-image score: `ghcr.io/smk762/argus-retina-synthetic`.** `POST /synthetic` returns Community Forensics' probability that an image was generated (`{"synthetic": 0.91}`), and no label. The caller keeps the cutoff. Weights are the MIT ViT-S/16-384 from `OwensLab/commfor-model-384` at Hub commit `6076002`, baked in and checked by sha256. CPU. `docker compose up` starts it on `:8136`.
+- **C2PA reader: `ghcr.io/smk762/argus-retina-c2pa`.** `POST /c2pa` returns a Content Credentials manifest's claims and `c2pa-python`'s validation state (`Trusted`, `Valid`, `Invalid`), or `present: false` when the file is unsigned. No weights. CPU. `docker compose up` starts it on `:8137`.
 - **SingGuard and faces register with argus-iris at startup** (argus-cortex 0.15). `create_app(..., coordinator=)` keeps the image's `gpu-tenant.yaml` registered for the server's lifetime (`argus_cortex.gpu.aregistered`: at startup, every few minutes, `DELETE /tenants/<tenant>` on shutdown), sending `ARGUS_ADMIN_TOKEN` for the admin routes. The broker finds the container through its node agent and calls the published port. `ARGUS_GPU_BROKER_URL` and `ARGUS_GPU_BROKER_TOKEN` are all it takes; without them nothing is sent, and a down broker never delays startup.
 
 ### Changed
@@ -16,9 +29,9 @@ section here becomes its GitHub Release notes, and the release fails before push
 - **argus-cortex 0.15**: the GPU images pin `argus-cortex[remote,gpu,yaml]==0.15.0` (was 0.10.0) and the package `>=0.15,<0.16` (was `>=0.8`). The broker URL alone now selects the broker: compose no longer defaults `ARGUS_GPU_COORDINATOR` to `none` (set it to `none` to ignore a URL), the Dockerfiles drop `ARGUS_GPU_TENANT_MANIFEST` (cortex finds `/app/gpu-tenant.yaml` itself), and the lock-file warning follows the same choice.
 - The SingGuard and faces residents name their container (`singguard`, `faces`: compose's services), which is how the broker places a registered resident.
 
-- **Synthetic-image score: `ghcr.io/smk762/argus-retina-synthetic`.** `POST /synthetic` returns Community Forensics' probability that an image was generated (`{"synthetic": 0.91}`), and no label. The caller keeps the cutoff. Weights are the MIT ViT-S/16-384 from `OwensLab/commfor-model-384` at Hub commit `6076002`, baked in and checked by sha256. CPU. `docker compose up` starts it on `:8136`.
-- **C2PA reader: `ghcr.io/smk762/argus-retina-c2pa`.** `POST /c2pa` returns a Content Credentials manifest's claims and `c2pa-python`'s validation state (`Trusted`, `Valid`, `Invalid`), or `present: false` when the file is unsigned. No weights. CPU. `docker compose up` starts it on `:8137`.
-- **Faces, phase 3 of argus-cortex#88 (#10): `ghcr.io/smk762/argus-retina-faces`.** `POST /faces` returns InsightFace `buffalo_l` boxes, ArcFace embeddings and pose, and MiVOLO age and gender. Clustering and the under-18 rule stay in the caller. The weights are mounted, not baked in (`buffalo_l` is not redistributed; the MiVOLO ONNX comes from `argus-curator mivolo-convert`). About 1 GB resident and 1.5 GB at peak. Each CUDA session's arena is capped (`FACES_GPU_MEM_LIMIT_MB`, default 1024). The resident is not pinned and asks to be dropped after 10 minutes idle; ONNX Runtime does not return the arena on unload, so iris should stop the container. `docker compose --profile gpu` starts it on `:8135`.
+### Fixed
+
+- **A resident stays servable after an unload or a lease failure (#24).** A CPU `unload()` returns false and leaves the model loaded. A `release()` that raises is logged after the state is already `unloaded`, so a CUDA error cannot leave a dropped model looking loaded. A refused GPU lease during a request is recorded on `/health`; an absent model stays `unloaded`, and a later request that gets a lease clears the reason.
 
 ## [0.2.1] - 2026-11-22
 

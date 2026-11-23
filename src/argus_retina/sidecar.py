@@ -6,7 +6,12 @@ in field order. ``argus_cortex.moderation`` parses it.
 
 ``GET /health`` answers argus-cortex's ``ResidentHealth`` (``model_state``, ``busy``, ``idle_s``), plus what the
 image runs (``model`` and whatever else it names, e.g. ``resolution``, which ``NudeNetClient.info()`` reads), and
-``version`` and ``commit``: AGPL section 13, the source this image was built from.
+``version`` and ``commit``: AGPL section 13, the source this image was built from. The same body is argus-cortex's
+``ServiceHealth`` (``argus_cortex.service.install_health``): ``service`` (``argus-retina``), ``status``, ``started_at``,
+``wire``, ``checks``, ``build`` (the commit) and ``peer`` (``ARGUS_PEER``, which compose sets to the container's
+``argus.peer`` label). It always answers 200, as it did before: ``status`` is ``degraded`` (the ``model`` check) while
+the model loads or after it failed to, and ``ok`` once a request would be served. ``503`` and ``starting`` are not
+used, because argus-iris and ``NudeNetClient.info()`` read the body while the model loads.
 
 The model loads on a background thread at startup, so ``/health`` answers ``loading`` (then ``cpu`` or ``gpu``, or
 ``error``) instead of the port staying closed. ``/infer`` answers 503 until it is loaded. One inference runs at a time.
@@ -29,6 +34,8 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from typing import Any, Literal
 
+from argus_cortex.gpu_wire import RESIDENT_VERSION
+from argus_cortex.service import DependencyCheck, install_health
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
@@ -57,6 +64,8 @@ Lease = Callable[[], AbstractContextManager[Any]]
 
 # The source commit, for /health (AGPL section 13). The image's Dockerfile sets it from the build.
 COMMIT_ENV = "ARGUS_RETINA_COMMIT"
+# ServiceHealth's ``service``: the package, the same for every image. The image is ``peer`` (and ``detector``).
+SERVICE = "argus-retina"
 
 # The largest image /infer decodes, in pixels: 2**27 (134 MP, about 400 MB as BGR) still admits a 108 MP phone photo.
 # OpenCV's own default is 2**30 (about 3 GB as BGR), so a small, highly compressed upload declaring huge dimensions
@@ -334,7 +343,7 @@ class Resident:
         if not busy and self.state in ("cpu", "gpu") and self._last_done is not None:
             idle = round(time.monotonic() - self._last_done, 1)
         body: dict[str, Any] = {
-            "resident_version": "1.0",
+            "resident_version": RESIDENT_VERSION,
             "model_state": self.state,
             "busy": busy,
             "idle_s": idle,
@@ -397,17 +406,35 @@ def create_app(
         if gpu is None:
             yield
             return
-        from argus_cortex.gpu import aregistered  # noqa: PLC0415 - GPU images install argus-cortex
+        from argus_cortex.gpu import aregistered  # noqa: PLC0415 - its httpx is only in the GPU images
 
         async with aregistered(gpu):
             yield
 
     app = FastAPI(title=f"argus-retina {resident.name}", version=argus_retina.__version__, lifespan=lifespan)
 
+    def own_fields() -> dict[str, Any]:
+        body = resident.health()
+        del body["version"]  # ServiceHealth's own field: install_health sets it, to the same value
+        return body
+
     # async: answered on the event loop, so /infer calls queued on the threadpool can't starve the HEALTHCHECK.
-    @app.get("/health")
-    async def health() -> dict[str, Any]:
-        return resident.health()
+    async def model_check() -> DependencyCheck:
+        return DependencyCheck(ok=resident.ready, detail=None if resident.ready else resident.state)
+
+    # No readiness=: that answers 503 while loading, and argus-iris and NudeNetClient.info() read this body then.
+    # A model that is loading or failed is a failed check instead (status degraded, still 200). The check only reads
+    # state, so it is not cached: status follows model_state at once.
+    install_health(
+        app,
+        service=SERVICE,
+        version=argus_retina.__version__,
+        wire={"resident_version": RESIDENT_VERSION},
+        checks={"model": model_check},
+        extra=own_fields,
+        build=os.environ.get(COMMIT_ENV) or None,
+        check_ttl_s=0,
+    )
 
     if infer:
 
@@ -442,7 +469,7 @@ def add_admin_routes(app: FastAPI, resident: Resident) -> None:
     Evict is an unload here: a GPU model on this server has no CPU stage to keep it warm in (a 4-bit bitsandbytes
     model can't move to the CPU), so a manifest declares only ``unload_path`` and ``warm_path``.
     """
-    from argus_cortex.auth import bearer  # noqa: PLC0415 - GPU images install argus-cortex; CPU images need no admin
+    from argus_cortex.auth import bearer  # noqa: PLC0415 - CPU images need no admin
 
     admin = [Depends(bearer("ARGUS_ADMIN_TOKEN", open_when_unset=True))]
 

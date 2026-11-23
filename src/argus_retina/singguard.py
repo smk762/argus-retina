@@ -28,11 +28,13 @@ import gc
 import hashlib
 import json
 import os
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
+from argus_cortex import settings
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
@@ -192,16 +194,19 @@ def load() -> Guard:
 
 
 _coordinator: Any = None
+# The startup load's thread (the lease) and the lifespan (the registration) both ask for it: build it once.
+_coordinator_lock = threading.Lock()
 
 
 def coordinator() -> Any:
     """The host's GPU coordinator, built once: the leases and the broker registration share it."""
     global _coordinator
-    if _coordinator is None:
-        from argus_cortex.gpu import coordinator_from_env  # noqa: PLC0415 - in the singguard image
+    with _coordinator_lock:
+        if _coordinator is None:
+            from argus_cortex.gpu import coordinator_from_env  # noqa: PLC0415 - in the singguard image
 
-        _coordinator = coordinator_from_env()
-    return _coordinator
+            _coordinator = coordinator_from_env()
+        return _coordinator
 
 
 def lease() -> Any:
@@ -365,7 +370,8 @@ resident = Resident(
     lease=lease,
 )
 configure_logging()
-if (_lock_problem := lock_warning()) is not None:
+# The suite file behind the environment, as cortex reads the same ARGUS_GPU_* settings (argus_cortex.settings).
+if (_lock_problem := lock_warning(settings.environ)) is not None:
     resident.log.warning("%s", _lock_problem)
 app = create_app(resident, infer=False, coordinator=coordinator)
 # A sync route: FastAPI runs it on the threadpool, so a generation never blocks /health on the event loop.

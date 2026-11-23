@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import gc
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from argus_cortex import settings
 from fastapi import HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
@@ -186,7 +188,7 @@ def _letterbox(rgb: np.ndarray) -> np.ndarray:
 
     height, width = rgb.shape[:2]
     scale = min(INPUT_SIZE / height, INPUT_SIZE / width)
-    nw, nh = int(round(width * scale)), int(round(height * scale))
+    nw, nh = max(1, int(round(width * scale))), max(1, int(round(height * scale)))
     resized = cv2.resize(rgb, (nw, nh), interpolation=cv2.INTER_LINEAR) if (nw, nh) != (width, height) else rgb
     canvas = np.zeros((INPUT_SIZE, INPUT_SIZE, 3), np.uint8)
     left = int(round((INPUT_SIZE - nw) / 2 - 0.1))
@@ -241,9 +243,9 @@ def apply_mivolo(records: list[dict[str, Any]], output: Any, idx: list[int]) -> 
         records[i]["age_years"] = years
 
 
-def detect(models: Any, images: list[bytes]) -> list[list[dict[str, Any]]]:
-    """Faces for each image, in order. ``models`` is the ``(insightface app, mivolo session)`` pair ``load`` built."""
-    frames = [decode_bgr(data) for data in images]
+def detect(models: Any, frames: list[np.ndarray]) -> list[list[dict[str, Any]]]:
+    """Faces for each decoded frame, in order. ``models`` is the ``(insightface app, mivolo session)`` pair ``load``
+    built."""
     app, session = models
     found: list[list[dict[str, Any]]] = []
     input_name = None
@@ -271,20 +273,32 @@ def load() -> Any:
     app = FaceAnalysis(name=PACK, root=str(ROOT), providers=providers, allowed_modules=list(MODULES))
     app.prepare(ctx_id=0, det_thresh=DET_THRESH, det_size=(640, 640))
     session = ort.InferenceSession(str(MIVOLO), providers=providers)
+    # ONNX Runtime lists CUDA as available even when its CUDA or cuDNN libraries can't be loaded, and then falls back
+    # to the CPU provider with only a log line. A GPU image that ends up on the CPU is a failed load, not a slow one.
+    on_cpu = [name for name, m in app.models.items() if "CUDAExecutionProvider" not in m.session.get_providers()]
+    if "CUDAExecutionProvider" not in session.get_providers():
+        on_cpu.append("mivolo")
+    if on_cpu:
+        raise RuntimeError(
+            f"CUDAExecutionProvider did not load for {', '.join(on_cpu)} (CUDA/cuDNN libraries missing?)"
+        )
     return app, session
 
 
 _coordinator: Any = None
+# The startup load's thread (the lease) and the lifespan (the registration) both ask for it: build it once.
+_coordinator_lock = threading.Lock()
 
 
 def coordinator() -> Any:
     """The host's GPU coordinator, built once: the leases and the broker registration share it."""
     global _coordinator
-    if _coordinator is None:
-        from argus_cortex.gpu import coordinator_from_env  # noqa: PLC0415 - in the faces image
+    with _coordinator_lock:
+        if _coordinator is None:
+            from argus_cortex.gpu import coordinator_from_env  # noqa: PLC0415 - in the faces image
 
-        _coordinator = coordinator_from_env()
-    return _coordinator
+            _coordinator = coordinator_from_env()
+        return _coordinator
 
 
 def lease() -> Any:
@@ -346,7 +360,8 @@ resident = Resident(
     lease=lease,
 )
 configure_logging()
-if (_lock_problem := lock_warning()) is not None:
+# The suite file behind the environment, as cortex reads the same ARGUS_GPU_* settings (argus_cortex.settings).
+if (_lock_problem := lock_warning(settings.environ)) is not None:
     resident.log.warning("%s", _lock_problem)
 app = create_app(resident, infer=False, coordinator=coordinator)
 
@@ -359,7 +374,9 @@ async def faces_route(request: Request) -> dict[str, Any]:
     if not images:
         raise HTTPException(status_code=400, detail="expected multipart image fields (f1, ...)")
     try:
-        found = await run_in_threadpool(resident.run, lambda models: detect(models, images))
+        # Decode before the GPU lease: an unreadable part is a 422 without taking a lease or loading the model.
+        frames = await run_in_threadpool(lambda: [decode_bgr(data) for data in images])
+        found = await run_in_threadpool(resident.run, lambda models: detect(models, frames))
     except UnreadableImage as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except NotReady as exc:

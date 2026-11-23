@@ -45,6 +45,8 @@ RESIZE = 440
 CROP = 384
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+# Past this, the resized frame is never built whole (an extreme aspect ratio): 440 x 38,000 or so.
+MAX_RESIZED_PIXELS = 1 << 24
 
 MODEL = Path(os.environ.get("SYNTHETIC_MODEL", "/models/synthetic/model.safetensors"))
 
@@ -64,9 +66,18 @@ def crop_origin(width: int, height: int, crop: int = CROP) -> tuple[int, int]:
 def preprocess(bgr: np.ndarray) -> np.ndarray:
     """BGR uint8, as ``decode_bgr`` returns it, to a ``(3, 384, 384)`` float32 tensor in the model's normalisation."""
     image = Image.fromarray(np.ascontiguousarray(bgr[:, :, ::-1]))
-    image = image.resize(resized_size(*image.size), Image.Resampling.BILINEAR)
-    left, top = crop_origin(*image.size)
-    image = image.crop((left, top, left + CROP, top + CROP))
+    width, height = image.size
+    rw, rh = resized_size(width, height)
+    left, top = crop_origin(rw, rh)
+    if rw * rh <= MAX_RESIZED_PIXELS:
+        image = image.resize((rw, rh), Image.Resampling.BILINEAR)
+        image = image.crop((left, top, left + CROP, top + CROP))
+    else:
+        # A thin image (1 x 100,000 resizes to 440 x 44,000,000) would not fit in memory: resize only the source region
+        # the crop keeps (PIL's ``box``). Within a level or two of the full resize.
+        sx, sy = width / rw, height / rh
+        box = (left * sx, top * sy, (left + CROP) * sx, (top + CROP) * sy)
+        image = image.resize((CROP, CROP), Image.Resampling.BILINEAR, box=box)
     arr = np.asarray(image, dtype=np.float32) / 255.0
     arr = (arr - MEAN) / STD
     return np.transpose(arr, (2, 0, 1))
