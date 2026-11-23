@@ -171,6 +171,8 @@ def test_singguard_is_a_gpu_tenant_with_an_unload_and_wake_resident():
     assert res.adapter == "argus-http" and res.admin_auth
     assert (res.health_path, res.unload_path, res.warm_path) == ("/health", "/admin/unload", "/admin/wake")
     assert res.evict_path is None  # no CPU stage: argus-iris unloads instead
+    # The broker places a registered resident by its container (compose.yaml's service), never a host it names.
+    assert (res.container, res.base_url) == ("singguard", None)
 
 
 def test_faces_is_an_evictable_gpu_tenant_at_the_measured_footprint():
@@ -183,6 +185,15 @@ def test_faces_is_an_evictable_gpu_tenant_at_the_measured_footprint():
     assert res.adapter == "argus-http" and res.admin_auth
     assert (res.health_path, res.unload_path, res.warm_path) == ("/health", "/admin/unload", "/admin/wake")
     assert res.evict_path is None  # no CPU stage, and the CUDA arena only goes when the container stops
+    assert (res.container, res.base_url) == ("faces", None)
+
+
+@pytest.mark.parametrize("image", ["singguard", "faces"])
+def test_a_gpu_image_ships_its_manifest_where_cortex_finds_it(image):
+    """argus-cortex 0.15 reads /app/gpu-tenant.yaml with no ARGUS_GPU_TENANT_MANIFEST, and registers at startup."""
+    text = (ROOT / "images" / image / "Dockerfile").read_text()
+    assert f"COPY images/{image}/gpu-tenant.yaml /app/gpu-tenant.yaml" in text
+    assert "argus-cortex[remote,gpu,yaml]==0.15." in (ROOT / "images" / image / "requirements.txt").read_text()
 
 
 def test_the_faces_image_bakes_in_no_weights_and_runs_on_the_gpu():

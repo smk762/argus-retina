@@ -41,7 +41,7 @@ dev = [
     "ruff==0.15.16",
     # Tests check /health against cortex's ResidentHealth and the manifests against TenantManifest; GPU images'
     # admin routes use argus_cortex.auth (0.8).
-    "argus-cortex[yaml]>=0.8",
+    "argus-cortex[yaml]>=0.15,<0.16",
     # SingGuard's request images (argus_retina.guard). The synthetic preprocess uses it too.
     "pillow>=10",
     # The C2PA reader's own test against an unsigned file. The image pins the same version.

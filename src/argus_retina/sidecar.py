@@ -361,18 +361,46 @@ class Resident:
         return {"resident_version": "1.0", "status": "ok", "model_state": self.state, "unloaded": unloaded}
 
 
-def create_app(resident: Resident, *, load: bool = True, infer: bool = True) -> FastAPI:
+def coordinator_or_none(build: Callable[[], Any], log: logging.Logger) -> Any:
+    """*build()*, the host's GPU coordinator, or None (logged) when the settings can't make one."""
+    try:
+        return build()
+    except Exception:  # noqa: BLE001 - a bad setting must not stop the server; the first lease reports it too
+        log.warning("no GPU coordinator from the ARGUS_GPU_* settings", exc_info=True)
+        return None
+
+
+def create_app(
+    resident: Resident,
+    *,
+    load: bool = True,
+    infer: bool = True,
+    coordinator: Callable[[], Any] | None = None,
+) -> FastAPI:
     """The FastAPI app around *resident*. ``load=False`` leaves loading to the caller (tests).
 
     ``infer=False`` leaves out ``POST /infer``, for an image that serves its own route (SingGuard). A GPU resident
     also gets the admin routes.
+
+    *coordinator* returns the GPU coordinator the image leases from (``argus_cortex.gpu``). The app keeps the image's
+    tenant registered with argus-iris while it serves (``gpu.aregistered``: at startup, again every few minutes, and
+    signed off at shutdown), so the broker knows the resident before the first request and gets the admin token for
+    ``/admin/*``. Nothing happens unless that coordinator is the broker (``ARGUS_GPU_BROKER_URL``), and a broker
+    that is down never delays startup.
     """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         if load:
             resident.start()
-        yield
+        gpu = coordinator_or_none(coordinator, resident.log) if coordinator is not None else None
+        if gpu is None:
+            yield
+            return
+        from argus_cortex.gpu import aregistered  # noqa: PLC0415 - GPU images install argus-cortex
+
+        async with aregistered(gpu):
+            yield
 
     app = FastAPI(title=f"argus-retina {resident.name}", version=argus_retina.__version__, lifespan=lifespan)
 

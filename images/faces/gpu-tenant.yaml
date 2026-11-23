@@ -18,8 +18,12 @@ kinds:
     model_mb: 1000
     priority: interactive
 residents:
+  # The server registers this manifest at startup (ARGUS_GPU_BROKER_URL), with ARGUS_ADMIN_TOKEN for the admin routes.
+  # No base_url: the broker finds the container through its node agent (by name, else compose service: compose.yaml's
+  # `faces`) and calls the node's host at the port it publishes (one, so no `port`).
   - name: faces
     adapter: argus-http
+    container: faces
     vram_mb: 1000
     pinned: false
     idle_kill_s: 600

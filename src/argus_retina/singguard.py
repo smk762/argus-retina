@@ -16,8 +16,9 @@ Settings: ``SINGGUARD_DIR`` (``/models/singguard``), ``SINGGUARD_QUANT`` (``4bit
 ``bf16``, about 9 GB), ``SINGGUARD_MAX_NEW_TOKENS`` (2048, the reasoning modes' budget: a generation cut off before
 its ``<answer>`` is a failed check), ``SINGGUARD_MAX_NEW_TOKENS_FAST`` (256), ``SINGGUARD_FORCE_THINKING`` (judge
 every request in one mode, whatever it asks for). GPU leases come from the host-wide ``ARGUS_GPU_*`` settings
-(``argus_cortex.gpu.coordinator_from_env``: ``broker`` asks argus-iris, unset takes none); the tenant is named by
-``images/singguard/gpu-tenant.yaml``, copied into the image. The weights are Apache-2.0 (SingGuard-4b and its base,
+(``argus_cortex.gpu.coordinator_from_env``: ``ARGUS_GPU_BROKER_URL`` asks argus-iris, unset takes none); the tenant
+is named by ``images/singguard/gpu-tenant.yaml``, copied into the image at ``/app/gpu-tenant.yaml``, and registered
+with the broker at startup. The weights are Apache-2.0 (SingGuard-4b and its base,
 Qwen3-VL-4B-Instruct).
 """
 
@@ -193,15 +194,20 @@ def load() -> Guard:
 _coordinator: Any = None
 
 
-def lease() -> Any:
-    """A ``guard`` lease from the host's GPU coordinator, made on first use (the broker client is built once)."""
+def coordinator() -> Any:
+    """The host's GPU coordinator, built once: the leases and the broker registration share it."""
     global _coordinator
     if _coordinator is None:
         from argus_cortex.gpu import coordinator_from_env  # noqa: PLC0415 - in the singguard image
 
         _coordinator = coordinator_from_env()
+    return _coordinator
+
+
+def lease() -> Any:
+    """A ``guard`` lease from the host's GPU coordinator, made on first use (the broker client is built once)."""
     vram_mb, model_mb = FOOTPRINT_MB[QUANT]
-    return _coordinator.lease(
+    return coordinator().lease(
         caller="argus-retina-singguard", min_vram_mb=vram_mb, model_mb=model_mb, kind="guard", priority="interactive"
     )
 
@@ -213,7 +219,9 @@ def lock_warning(env: Mapping[str, str] = os.environ) -> str | None:
     first lease that falls back to the host lock (the broker unreachable, say after a reboot) is refused. Said once
     at startup, naming the path, rather than only in the 503 of a later check (argus-retina#20).
     """
-    coordinator = env.get("ARGUS_GPU_COORDINATOR", "").strip().lower()
+    # cortex's choice: ARGUS_GPU_COORDINATOR, else the broker when ARGUS_GPU_BROKER_URL is set.
+    url = env.get("ARGUS_GPU_BROKER_URL", "").strip()
+    coordinator = env.get("ARGUS_GPU_COORDINATOR", "").strip().lower() or ("broker" if url else "none")
     fallback = env.get("ARGUS_GPU_BROKER_FALLBACK", "lease").strip().lower() or "lease"
     if coordinator != "lease" and not (coordinator == "broker" and fallback == "lease"):
         return None
@@ -359,6 +367,6 @@ resident = Resident(
 configure_logging()
 if (_lock_problem := lock_warning()) is not None:
     resident.log.warning("%s", _lock_problem)
-app = create_app(resident, infer=False)
+app = create_app(resident, infer=False, coordinator=coordinator)
 # A sync route: FastAPI runs it on the threadpool, so a generation never blocks /health on the event loop.
 app.add_api_route("/api/guard/check", check, methods=["POST"])

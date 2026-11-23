@@ -277,14 +277,19 @@ def load() -> Any:
 _coordinator: Any = None
 
 
-def lease() -> Any:
-    """A ``faces`` lease from the host's GPU coordinator, built once."""
+def coordinator() -> Any:
+    """The host's GPU coordinator, built once: the leases and the broker registration share it."""
     global _coordinator
     if _coordinator is None:
         from argus_cortex.gpu import coordinator_from_env  # noqa: PLC0415 - in the faces image
 
         _coordinator = coordinator_from_env()
-    return _coordinator.lease(
+    return _coordinator
+
+
+def lease() -> Any:
+    """A ``faces`` lease from the host's GPU coordinator, built once."""
+    return coordinator().lease(
         caller="argus-retina-faces",
         min_vram_mb=VRAM_MB,
         model_mb=MODEL_MB,
@@ -300,7 +305,9 @@ def release() -> None:
 
 def lock_warning(env: Any = os.environ) -> str | None:
     """Why the GPU lease's lock-file fallback would fail here, or None. Same constraint as SingGuard (#20)."""
-    coordinator = env.get("ARGUS_GPU_COORDINATOR", "").strip().lower()
+    # cortex's choice: ARGUS_GPU_COORDINATOR, else the broker when ARGUS_GPU_BROKER_URL is set.
+    url = env.get("ARGUS_GPU_BROKER_URL", "").strip()
+    coordinator = env.get("ARGUS_GPU_COORDINATOR", "").strip().lower() or ("broker" if url else "none")
     fallback = env.get("ARGUS_GPU_BROKER_FALLBACK", "lease").strip().lower() or "lease"
     if coordinator != "lease" and not (coordinator == "broker" and fallback == "lease"):
         return None
@@ -341,7 +348,7 @@ resident = Resident(
 configure_logging()
 if (_lock_problem := lock_warning()) is not None:
     resident.log.warning("%s", _lock_problem)
-app = create_app(resident, infer=False)
+app = create_app(resident, infer=False, coordinator=coordinator)
 
 
 async def faces_route(request: Request) -> dict[str, Any]:

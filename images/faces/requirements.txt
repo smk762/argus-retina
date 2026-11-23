@@ -2,5 +2,5 @@
 # insightface may pull the CPU onnxruntime wheel; the Dockerfile removes it and keeps onnxruntime-gpu.
 insightface==0.7.3
 onnxruntime-gpu==1.20.2
-# Admin bearer check, GPU leases, and the tenant manifest.
-argus-cortex[remote,gpu,yaml]==0.10.0
+# Admin bearer check, GPU leases, and the tenant manifest (0.15: registered with the broker at startup).
+argus-cortex[remote,gpu,yaml]==0.15.0

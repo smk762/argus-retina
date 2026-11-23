@@ -17,9 +17,12 @@ kinds:
     priority: interactive
 residents:
   # Evict would be an unload (a 4-bit model can't move to the CPU), so only unload and warm are declared.
-  # base_url and container are the deployment's: set them in the broker's config.
+  # The server registers this manifest at startup (ARGUS_GPU_BROKER_URL), with ARGUS_ADMIN_TOKEN for the admin routes.
+  # No base_url: the broker finds the container through its node agent (by name, else compose service: compose.yaml's
+  # `singguard`) and calls the node's host at the port it publishes (one, so no `port`).
   - name: singguard
     adapter: argus-http
+    container: singguard
     vram_mb: 3600
     pinned: true                  # content checks for cull scans and darkroom pre-flights
     health_path: /health

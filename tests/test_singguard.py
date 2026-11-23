@@ -288,6 +288,8 @@ def test_a_check_after_a_failed_gpu_load_tries_the_load_again(monkeypatch):
         ({}, False),  # no coordinator: no leases at all
         ({"ARGUS_GPU_COORDINATOR": "broker", "ARGUS_GPU_BROKER_FALLBACK": "none"}, False),
         ({"ARGUS_GPU_COORDINATOR": "broker"}, True),
+        ({"ARGUS_GPU_BROKER_URL": "http://broker.invalid:8120"}, True),  # the URL alone is the broker (cortex 0.15)
+        ({"ARGUS_GPU_BROKER_URL": "http://broker.invalid:8120", "ARGUS_GPU_COORDINATOR": "none"}, False),
         ({"ARGUS_GPU_COORDINATOR": "lease"}, True),
     ],
 )
