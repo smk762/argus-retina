@@ -5,6 +5,8 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-23
+
 ### Added
 
 - **SingGuard and faces register with argus-iris at startup** (argus-cortex 0.15). `create_app(..., coordinator=)` keeps the image's `gpu-tenant.yaml` registered for the server's lifetime (`argus_cortex.gpu.aregistered`: at startup, every few minutes, `DELETE /tenants/<tenant>` on shutdown), sending `ARGUS_ADMIN_TOKEN` for the admin routes. The broker finds the container through its node agent and calls the published port. `ARGUS_GPU_BROKER_URL` and `ARGUS_GPU_BROKER_TOKEN` are all it takes; without them nothing is sent, and a down broker never delays startup.
