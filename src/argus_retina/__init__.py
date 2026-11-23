@@ -1,4 +1,4 @@
-"""argus-retina — Shared detector servers for the Argus suite: NudeNet, EraX, watermark and guard models behind one HTTP contract"""
+"""argus-retina — Shared detector servers for the Argus suite: NudeNet, EraX, watermark, OCR, guards, faces, synthetic scores and C2PA manifests behind one HTTP contract"""
 
 from __future__ import annotations
 

@@ -7,6 +7,8 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ### Added
 
+- **Synthetic-image score: `ghcr.io/smk762/argus-retina-synthetic`.** `POST /synthetic` returns Community Forensics' probability that an image was generated (`{"synthetic": 0.91}`), and no label. The caller keeps the cutoff. Weights are the MIT ViT-S/16-384 from `OwensLab/commfor-model-384` at Hub commit `6076002`, baked in and checked by sha256. CPU. `docker compose up` starts it on `:8136`.
+- **C2PA reader: `ghcr.io/smk762/argus-retina-c2pa`.** `POST /c2pa` returns a Content Credentials manifest's claims and `c2pa-python`'s validation state (`Trusted`, `Valid`, `Invalid`), or `present: false` when the file is unsigned. No weights. CPU. `docker compose up` starts it on `:8137`.
 - **Faces, phase 3 of argus-cortex#88 (#10): `ghcr.io/smk762/argus-retina-faces`.** `POST /faces` returns InsightFace `buffalo_l` boxes, ArcFace embeddings and pose, and MiVOLO age and gender. Clustering and the under-18 rule stay in the caller. The weights are mounted, not baked in (`buffalo_l` is not redistributed; the MiVOLO ONNX comes from `argus-curator mivolo-convert`). About 1 GB resident and 1.5 GB at peak. Each CUDA session's arena is capped (`FACES_GPU_MEM_LIMIT_MB`, default 1024). The resident is not pinned and asks to be dropped after 10 minutes idle; ONNX Runtime does not return the arena on unload, so iris should stop the container. `docker compose --profile gpu` starts it on `:8135`.
 
 ## [0.2.1] - 2026-11-22

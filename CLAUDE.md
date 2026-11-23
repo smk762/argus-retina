@@ -8,13 +8,13 @@ The suite's **shared detector servers**: small, stateless model servers that tak
 
 Designed in [argus-cortex#88](https://github.com/smk762/argus-cortex/issues/88); its first job is [argus-cortex#79](https://github.com/smk762/argus-cortex/issues/79), one shared NudeNet 640m in place of the six copies across the suite.
 
-**Status: phase 1 released (v0.1.0) and its callers migrated (#1); phase 2, SingGuard, built (#9); phase 3, faces, started (#10).** NudeNet 640m, EraX and watermark have moved here, OCR is new (#5), and SingGuard and faces are the GPU images. The watermark, SingGuard and faces images ship without weights (see the table below).
+**Status: phase 1 released (v0.1.0) and its callers migrated (#1); phase 2, SingGuard, built (#9); phase 3, faces, started (#10).** NudeNet 640m, EraX and watermark have moved here, OCR is new (#5), and SingGuard and faces are the GPU images. A Community Forensics score (`synthetic`) and a C2PA reader (`c2pa`) are CPU images too. The watermark, SingGuard and faces images ship without weights (see the table below); C2PA has none.
 
 ## Layout
 
 ```
 src/argus_retina/  sidecar      # the contract: Resident (background load, one inference at a time, /health; on a GPU, /admin/*), create_app
-                   nudenet erax watermark ocr singguard faces  # one module per model (yolo: the shared Ultralytics box conversion): load() imports the detector library lazily, so tests run without it
+                   nudenet erax watermark ocr synthetic c2pa singguard faces  # one module per model (yolo: the shared Ultralytics box conversion): load() imports the detector library lazily, so tests run without it
                    guard        # SingGuard's request shaping, prompt-injection guards and generation parsing, without torch
                    healthcheck  # `python -m argus_retina.healthcheck`: the images' HEALTHCHECK (healthy once loaded)
 images/<model>/    Dockerfile requirements.txt gpu-tenant.yaml   # build from the repo root; weights/ is fetched, gitignored
@@ -57,7 +57,7 @@ In: stateless perception models with no policy. Out:
 
 ## The contract every image serves
 
-- `POST /infer`: multipart image fields `f1`, `f2`... answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, in field order. This is NudeNet's shape, already shared by cull's sidecars and parsed by `argus_cortex.moderation`. The OCR image adds a `text` field to each detection (`class` is `"text"`); keep new fields additive like that.
+- `POST /infer`: multipart image fields `f1`, `f2`... answered by `{"prediction": [[{"class", "score", "box": [x, y, w, h]}, ...], ...], "success": true}`, in field order. This is NudeNet's shape, already shared by cull's sidecars and parsed by `argus_cortex.moderation`. The OCR image adds a `text` field to each detection (`class` is `"text"`); keep new fields additive like that. Whole-image readings that are not boxes get their own route: `POST /synthetic` (one probability per image, no label) and `POST /c2pa` (the manifest's claims and the library's validation state).
 - `GET /health`: `argus_cortex.gpu_wire.ResidentHealth` (`model_state`, `busy`, `idle_s`, optional `gpu`), plus `model` and `resolution` (read by `NudeNetClient.info()`) and the source commit.
 - `/admin/unload|evict|wake` (`ResidentActionReply`; 409 `ResidentBusyReply`) only on images that hold VRAM.
 - A `gpu-tenant.yaml` per image declaring its footprint. Placement is by VRAM across 2–3 headless GPU workers, and argus-iris does the placing.
@@ -74,6 +74,8 @@ Publishing to GHCR redistributes the weights inside each image. Pin every file b
 | SingGuard-4b | `inclusionAI/SingGuard-4b` (was `Sing-Guard-4b`) at Hub commit `4e082d0`, on Qwen3-VL-4B-Instruct; both Apache-2.0 (checked on #9) | OK to ship, but 8.9 GB: **fetched at runtime** into the `/models/singguard` volume, every file checked against the sha256s in `singguard.FILES` (a test checks the Dockerfile fetches nothing). No remote code: transformers 4.57 has Qwen3-VL |
 | Faces | InsightFace `buffalo_l` (non-commercial: **never bake it in**) mounted at `/models/insightface`; MiVOLO v2 ONNX (Apache-2.0, from `argus-curator mivolo-convert`) mounted at `/models/faces/mivolo_v2_d1_384.onnx` | A test checks the Dockerfile fetches nothing |
 | Watermark | fancyfeast's YOLO11x (Space commit `9bb8f6a`, sha256 `80b022e9…326e`; pinned in the Makefile for `make watermark-weights`) | **No licence: never bake it in.** Mounted at `/models/watermark.pt`; a test checks the Dockerfile fetches nothing. mnemic's CC-BY-4.0 YOLOv8s lost the trial (15/32 vs 28/32 at 0.4, cortex#88) |
+| Community Forensics | `OwensLab/commfor-model-384` at Hub commit `6076002`, sha256 `b89f3627…b387` (MIT weights; the training set is CC-BY-4.0 and is not shipped) | OK to bake in. The pin is in the Dockerfile and in `synthetic.REVISION` / `SHA256` |
+| C2PA | none | A reader (`c2pa-python`, MIT OR Apache-2.0), not a model. A test checks the Dockerfile fetches nothing |
 
 ## Commands
 

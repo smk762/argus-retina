@@ -221,6 +221,8 @@ def test_the_app_loads_its_model_at_startup():
         "argus_retina.erax",
         "argus_retina.watermark",
         "argus_retina.ocr",
+        "argus_retina.synthetic",
+        "argus_retina.c2pa",
         "argus_retina.faces",
     ],
 )
@@ -235,6 +237,12 @@ def test_the_image_modules_import_without_their_detector(module, monkeypatch, tm
     elif module.endswith(".faces"):
         monkeypatch.setattr(mod, "ROOT", tmp_path)
         monkeypatch.setattr(mod, "MIVOLO", tmp_path / "missing.onnx")
+    elif module.endswith(".c2pa"):
+        try:
+            mod.load()
+        except ImportError:
+            return  # the reader is not installed here; importing the module did not need it
+        return
     else:
         monkeypatch.setattr(mod, "MODEL", tmp_path / "missing.onnx")
     with pytest.raises(FileNotFoundError):

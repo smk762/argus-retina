@@ -12,7 +12,7 @@ from argus_cortex.gpu_wire import load_tenant_manifest
 from argus_retina.yolo import boxes
 
 ROOT = Path(__file__).parent.parent
-IMAGES = ["nudenet", "erax", "watermark", "ocr"]
+IMAGES = ["nudenet", "erax", "watermark", "ocr", "synthetic", "c2pa"]
 NUDENET_640M_SHA256 = "04fe3d77980780c1f8297dc6d7f942fd5b3abe6942a188f742a85241e4f634eb"
 
 
@@ -113,6 +113,23 @@ def test_the_watermark_weights_for_a_local_mount_are_pinned_to_a_space_commit_an
     make = (ROOT / "Makefile").read_text()
     assert re.search(r"joycaption-watermark-detection/resolve/[0-9a-f]{40}/yolo11x-train28-best\.pt", make)
     assert re.search(r"WATERMARK_SHA256 := [0-9a-f]{64}", make)
+
+
+def test_synthetic_weights_are_pinned_to_the_same_hub_commit_and_checksum_as_the_module():
+    from argus_retina.synthetic import REVISION, SHA256
+
+    text = (ROOT / "images" / "synthetic" / "Dockerfile").read_text()
+    assert f"commfor-model-384/resolve/{REVISION}/model.safetensors" in text
+    assert f"SYNTHETIC_SHA256={SHA256}" in text
+    assert "sha256sum -c -" in text
+
+
+def test_the_c2pa_image_bakes_in_no_weights_and_pins_the_reader():
+    text = (ROOT / "images" / "c2pa" / "Dockerfile").read_text()
+    assert fetched_weights(text) == []
+    pin = "c2pa-python==0.39.0"
+    assert pin in (ROOT / "images" / "c2pa" / "requirements.txt").read_text()
+    assert pin in (ROOT / "pyproject.toml").read_text()
 
 
 def test_ocr_models_are_pinned_to_a_release_and_checksums():

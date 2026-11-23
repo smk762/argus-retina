@@ -1,6 +1,6 @@
 # argus-retina's detectors, published on loopback only. To serve the LAN, set RETINA_BIND=0.0.0.0 in .env
 # (the servers have no auth: keep them on a trusted network).
-#   docker compose up -d                      # the released images
+#   docker compose up -d                      # the released images, including synthetic (:8136) and c2pa (:8137)
 #   docker compose build && docker compose up -d   # from source, after `make weights`
 #   docker compose --profile gpu up -d        # SingGuard and faces too (the GPU images)
 
@@ -118,6 +118,26 @@ services:
     gpus: all
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${FACES_PORT:-8135}:8080"
+
+  synthetic:
+    # Community Forensics weights are MIT and small, so they are baked in (pinned by Hub commit and sha256).
+    image: ghcr.io/smk762/argus-retina-synthetic:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/synthetic/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${SYNTHETIC_PORT:-8136}:8080"
+
+  c2pa:
+    # No model. Reads a C2PA manifest in the file, if there is one.
+    image: ghcr.io/smk762/argus-retina-c2pa:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/c2pa/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${C2PA_PORT:-8137}:8080"
 
 volumes:
   singguard_weights:
