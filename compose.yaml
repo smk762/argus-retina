@@ -67,8 +67,10 @@ services:
       - SINGGUARD_FORCE_THINKING=${SINGGUARD_FORCE_THINKING:-}
       - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
       # GPU leases (argus_cortex.gpu): the host's settings, as the suite's other GPU stages take them. Unset is none.
-      # broker asks argus-iris (ARGUS_GPU_BROKER_URL and _TOKEN), falling back to a host lock at ARGUS_GPU_LEASE_PATH.
-      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-none}
+      # ARGUS_GPU_BROKER_URL and _TOKEN alone ask argus-iris, falling back to a host lock at ARGUS_GPU_LEASE_PATH, and
+      # register images/singguard/gpu-tenant.yaml at startup (container: singguard, this service). For the broker to
+      # reach it, publish it on an address the broker can reach (RETINA_BIND).
+      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-}
       - ARGUS_GPU_BROKER_URL=${ARGUS_GPU_BROKER_URL:-}
       - ARGUS_GPU_BROKER_TOKEN=${ARGUS_GPU_BROKER_TOKEN:-}
       - ARGUS_GPU_BROKER_FALLBACK=${ARGUS_GPU_BROKER_FALLBACK:-lease}
@@ -95,7 +97,7 @@ services:
       - FACES_DET_THRESH=${FACES_DET_THRESH:-0.5}
       - FACES_GPU_MEM_LIMIT_MB=${FACES_GPU_MEM_LIMIT_MB:-1024}
       - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
-      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-none}
+      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-}
       - ARGUS_GPU_BROKER_URL=${ARGUS_GPU_BROKER_URL:-}
       - ARGUS_GPU_BROKER_TOKEN=${ARGUS_GPU_BROKER_TOKEN:-}
       - ARGUS_GPU_BROKER_FALLBACK=${ARGUS_GPU_BROKER_FALLBACK:-lease}

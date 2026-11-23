@@ -7,6 +7,13 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ### Added
 
+- **SingGuard and faces register with argus-iris at startup** (argus-cortex 0.15). `create_app(..., coordinator=)` keeps the image's `gpu-tenant.yaml` registered for the server's lifetime (`argus_cortex.gpu.aregistered`: at startup, every few minutes, `DELETE /tenants/<tenant>` on shutdown), sending `ARGUS_ADMIN_TOKEN` for the admin routes. The broker finds the container through its node agent and calls the published port. `ARGUS_GPU_BROKER_URL` and `ARGUS_GPU_BROKER_TOKEN` are all it takes; without them nothing is sent, and a down broker never delays startup.
+
+### Changed
+
+- **argus-cortex 0.15**: the GPU images pin `argus-cortex[remote,gpu,yaml]==0.15.0` (was 0.10.0) and the package `>=0.15,<0.16` (was `>=0.8`). The broker URL alone now selects the broker: compose no longer defaults `ARGUS_GPU_COORDINATOR` to `none` (set it to `none` to ignore a URL), the Dockerfiles drop `ARGUS_GPU_TENANT_MANIFEST` (cortex finds `/app/gpu-tenant.yaml` itself), and the lock-file warning follows the same choice.
+- The SingGuard and faces residents name their container (`singguard`, `faces`: compose's services), which is how the broker places a registered resident.
+
 - **Synthetic-image score: `ghcr.io/smk762/argus-retina-synthetic`.** `POST /synthetic` returns Community Forensics' probability that an image was generated (`{"synthetic": 0.91}`), and no label. The caller keeps the cutoff. Weights are the MIT ViT-S/16-384 from `OwensLab/commfor-model-384` at Hub commit `6076002`, baked in and checked by sha256. CPU. `docker compose up` starts it on `:8136`.
 - **C2PA reader: `ghcr.io/smk762/argus-retina-c2pa`.** `POST /c2pa` returns a Content Credentials manifest's claims and `c2pa-python`'s validation state (`Trusted`, `Valid`, `Invalid`), or `present: false` when the file is unsigned. No weights. CPU. `docker compose up` starts it on `:8137`.
 - **Faces, phase 3 of argus-cortex#88 (#10): `ghcr.io/smk762/argus-retina-faces`.** `POST /faces` returns InsightFace `buffalo_l` boxes, ArcFace embeddings and pose, and MiVOLO age and gender. Clustering and the under-18 rule stay in the caller. The weights are mounted, not baked in (`buffalo_l` is not redistributed; the MiVOLO ONNX comes from `argus-curator mivolo-convert`). About 1 GB resident and 1.5 GB at peak. Each CUDA session's arena is capped (`FACES_GPU_MEM_LIMIT_MB`, default 1024). The resident is not pinned and asks to be dropped after 10 minutes idle; ONNX Runtime does not return the arena on unload, so iris should stop the container. `docker compose --profile gpu` starts it on `:8135`.

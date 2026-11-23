@@ -587,3 +587,70 @@ def test_infer_on_a_cpu_resident_that_failed_to_load_stays_a_503():
     c = TestClient(create_app(r, load=False))
     r.load()
     assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 503
+
+
+# ── argus-iris registration (argus-cortex 0.15) ─────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def broker(monkeypatch):
+    """An in-memory broker the GPU coordinator talks to; the requests it saw."""
+    httpx = pytest.importorskip("httpx")
+    from argus_cortex import gpu
+
+    seen: list = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200 if request.method == "POST" else 204, json={})
+
+    def coordinator():
+        built = gpu.coordinator_from_env()
+        if built.name == "broker":
+            built._async_transport = httpx.MockTransport(handler)
+        return built
+
+    for name in ("ARGUS_GPU_COORDINATOR", "ARGUS_GPU_TENANT", "ARGUS_GPU_BROKER_URL"):
+        monkeypatch.delenv(name, raising=False)
+    manifest = os.path.join(os.path.dirname(__file__), "..", "images", "singguard", "gpu-tenant.yaml")
+    monkeypatch.setenv("ARGUS_GPU_TENANT_MANIFEST", manifest)
+    return seen, coordinator
+
+
+def _gpu_app(coordinator) -> TestClient:
+    r = Resident("SingGuard", lambda: object(), {"model": "stand-in"}, device="gpu")
+    return TestClient(create_app(r, load=False, infer=False, coordinator=coordinator))
+
+
+def test_a_gpu_image_registers_at_startup_and_signs_off(broker, monkeypatch):
+    seen, coordinator = broker
+    monkeypatch.setenv("ARGUS_GPU_BROKER_URL", "http://broker.invalid:8120")
+    monkeypatch.setenv("ARGUS_GPU_BROKER_TOKEN", "caller-secret")
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", "admin-secret")
+    with _gpu_app(coordinator):
+        end = time.monotonic() + 5
+        while not seen and time.monotonic() < end:
+            time.sleep(0.01)
+        assert seen, "no registration at startup"
+        post = seen[0]
+        assert (post.method, post.url.path) == ("POST", "/tenants")
+        assert post.headers["authorization"] == "Bearer caller-secret"
+        assert post.headers["x-argus-admin-token"] == "admin-secret"  # the resident has admin_auth
+        assert b'"argus-retina-singguard"' in post.content
+    assert (seen[-1].method, seen[-1].url.path) == ("DELETE", "/tenants/argus-retina-singguard")
+
+
+def test_without_a_broker_url_nothing_registers(broker):
+    seen, coordinator = broker
+    with _gpu_app(coordinator) as c:
+        assert c.get("/health").status_code == 200
+        time.sleep(0.05)
+    assert seen == []
+
+
+def test_a_coordinator_that_cannot_be_built_does_not_stop_the_server():
+    def broken():
+        raise ValueError("ARGUS_GPU_COORDINATOR='nonsense'")
+
+    with _gpu_app(broken) as c:
+        assert c.get("/health").status_code == 200

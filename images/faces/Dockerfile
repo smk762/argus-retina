@@ -41,7 +41,6 @@ ENV PYTHONUNBUFFERED=1 \
     MIVOLO_MODEL=/models/faces/mivolo_v2_d1_384.onnx \
     FACES_DET_THRESH=0.5 \
     FACES_GPU_MEM_LIMIT_MB=1024 \
-    ARGUS_GPU_TENANT_MANIFEST=/app/gpu-tenant.yaml \
     ARGUS_RETINA_COMMIT=${COMMIT}
 LABEL org.opencontainers.image.title="argus-retina-faces" \
       org.opencontainers.image.description="InsightFace buffalo_l and MiVOLO behind POST /faces, /health and /admin (GPU; weights mounted)" \

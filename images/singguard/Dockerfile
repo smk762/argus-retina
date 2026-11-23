@@ -38,7 +38,6 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HUB_DISABLE_TELEMETRY=1 \
     SINGGUARD_DIR=/models/singguard \
     SINGGUARD_QUANT=4bit \
-    ARGUS_GPU_TENANT_MANIFEST=/app/gpu-tenant.yaml \
     ARGUS_RETINA_COMMIT=${COMMIT}
 LABEL org.opencontainers.image.title="argus-retina-singguard" \
       org.opencontainers.image.description="SingGuard-4b behind argus-retina's /api/guard/check, /health and /admin routes (GPU; weights fetched to a volume)" \
