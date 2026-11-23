@@ -7,12 +7,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from argus_cortex.gpu_wire import load_tenant_manifest
 
 from argus_retina.yolo import boxes
 
 ROOT = Path(__file__).parent.parent
 IMAGES = ["nudenet", "erax", "watermark", "ocr", "synthetic", "c2pa"]
+ALL_IMAGES = [*IMAGES, "singguard", "faces"]
 NUDENET_640M_SHA256 = "04fe3d77980780c1f8297dc6d7f942fd5b3abe6942a188f742a85241e4f634eb"
 
 
@@ -190,10 +192,10 @@ def test_faces_is_an_evictable_gpu_tenant_at_the_measured_footprint():
 
 @pytest.mark.parametrize("image", ["singguard", "faces"])
 def test_a_gpu_image_ships_its_manifest_where_cortex_finds_it(image):
-    """argus-cortex 0.15 reads /app/gpu-tenant.yaml with no ARGUS_GPU_TENANT_MANIFEST, and registers at startup."""
+    """argus-cortex (from 0.15) reads /app/gpu-tenant.yaml with no ARGUS_GPU_TENANT_MANIFEST, and registers at startup."""
     text = (ROOT / "images" / image / "Dockerfile").read_text()
     assert f"COPY images/{image}/gpu-tenant.yaml /app/gpu-tenant.yaml" in text
-    assert "argus-cortex[remote,gpu,yaml]==0.15." in (ROOT / "images" / image / "requirements.txt").read_text()
+    assert "argus-cortex[remote,gpu,yaml]==0.16." in (ROOT / "images" / image / "requirements.txt").read_text()
 
 
 def test_the_faces_image_bakes_in_no_weights_and_runs_on_the_gpu():
@@ -231,3 +233,37 @@ def test_every_image_is_built_by_ci_released_and_in_the_makefile():
         assert {name.strip() for name in matrix.split(",")} == images, workflow
     (listed,) = re.findall(r"^IMAGES \?= (.*)$", (ROOT / "Makefile").read_text(), re.MULTILINE)
     assert set(listed.split()) == images
+
+
+def _compose() -> dict:
+    return yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
+
+
+def test_every_compose_service_carries_the_discovery_labels():
+    """argus-iris builds the suite's directory from these (argus_cortex.service): one peer per image."""
+    from argus_cortex.peers import PEER_NAME_PATTERN
+    from argus_cortex.service import HEALTH_LABEL, PEER_LABEL, PORT_LABEL, SERVICE_LABEL
+
+    services = _compose()
+    assert set(services) == set(ALL_IMAGES)
+    for name, svc in services.items():
+        assert svc["labels"] == {
+            PEER_LABEL: name,
+            SERVICE_LABEL: "argus-retina",
+            HEALTH_LABEL: "/health",
+            PORT_LABEL: "8080",
+        }, name
+        assert re.fullmatch(PEER_NAME_PATTERN, name)
+        # A process can't read its own labels: /health's ``peer`` comes from ARGUS_PEER.
+        assert f"ARGUS_PEER={name}" in svc["environment"], name
+        assert all(port.endswith(":8080") for port in svc["ports"]), name
+
+
+def test_every_image_installs_cortex_for_the_health_route():
+    """sidecar imports argus_cortex.service at module level, so the server extra every image installs carries it."""
+    import tomllib
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    assert "argus-cortex>=0.16,<0.17" in project["optional-dependencies"]["server"]
+    for image in ALL_IMAGES:
+        assert '".[server]"' in (ROOT / "images" / image / "Dockerfile").read_text(), image

@@ -5,6 +5,16 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ## [Unreleased]
 
+### Added
+
+- **`/health` is also argus-cortex's `ServiceHealth`** (argus-cortex#212, #209), on every image, served by `argus_cortex.service.install_health`. New fields: `service_version`, `service` (`argus-retina`), `status`, `started_at`, `wire` (`resident_version`), `capabilities`, `checks`, `read_only`, `build` (the source commit) and `peer` (`ARGUS_PEER`). Every field it had is still there with the same value, and it still answers `200` in every state. `status` is `ok` when a request would be served and `degraded` while the model loads or after it failed to (the `model` check gives the state); `starting` and its `503` are not used, because argus-iris and `NudeNetClient.info()` read the body while the model loads.
+- **Discovery labels in `compose.yaml`.** Each container carries `argus.peer` (`nudenet`, `erax`, `watermark`, `ocr`, `synthetic`, `c2pa`, `singguard`, `faces`), `argus.service: argus-retina`, `argus.health: /health` and `argus.port: "8080"`, and `ARGUS_PEER` in its environment, so argus-iris can list it in the suite's directory.
+- **The suite file.** SingGuard and faces read `ARGUS_GPU_BROKER_URL`, `ARGUS_GPU_BROKER_TOKEN` and `ARGUS_ADMIN_TOKEN` from `/etc/argus/suite.env` when the container's environment leaves them unset (argus-cortex's `settings`), and the lock-file warning at startup reads it too. The mount is a commented-out line in `compose.yaml`: compose has no optional bind mount, and the non-root image needs a root-owned, mode 444 copy.
+
+### Changed
+
+- **argus-cortex 0.16**: the GPU images pin `argus-cortex[remote,gpu,yaml]==0.16.0` (was 0.15.0) and the package `>=0.16,<0.17`. **The CPU images now install argus-cortex too** (through the `server` extra, no extras of its own: pydantic only), for the health route.
+
 ## [0.3.0] - 2026-11-23
 
 ### Added

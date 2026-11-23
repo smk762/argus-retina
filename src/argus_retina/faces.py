@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from argus_cortex import settings
 from fastapi import HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
@@ -359,7 +360,8 @@ resident = Resident(
     lease=lease,
 )
 configure_logging()
-if (_lock_problem := lock_warning()) is not None:
+# The suite file behind the environment, as cortex reads the same ARGUS_GPU_* settings (argus_cortex.settings).
+if (_lock_problem := lock_warning(settings.environ)) is not None:
     resident.log.warning("%s", _lock_problem)
 app = create_app(resident, infer=False, coordinator=coordinator)
 
