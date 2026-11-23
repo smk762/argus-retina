@@ -19,6 +19,10 @@ section here becomes its GitHub Release notes, and the release fails before push
 - **argus-cortex 0.15**: the GPU images pin `argus-cortex[remote,gpu,yaml]==0.15.0` (was 0.10.0) and the package `>=0.15,<0.16` (was `>=0.8`). The broker URL alone now selects the broker: compose no longer defaults `ARGUS_GPU_COORDINATOR` to `none` (set it to `none` to ignore a URL), the Dockerfiles drop `ARGUS_GPU_TENANT_MANIFEST` (cortex finds `/app/gpu-tenant.yaml` itself), and the lock-file warning follows the same choice.
 - The SingGuard and faces residents name their container (`singguard`, `faces`: compose's services), which is how the broker places a registered resident.
 
+### Fixed
+
+- **A resident stays servable after an unload or a lease failure (#24).** A CPU `unload()` returns false and leaves the model loaded. A `release()` that raises is logged after the state is already `unloaded`, so a CUDA error cannot leave a dropped model looking loaded. A refused GPU lease during a request is recorded on `/health`; an absent model stays `unloaded`, and a later request that gets a lease clears the reason.
+
 ## [0.2.1] - 2026-11-22
 
 ### Fixed
