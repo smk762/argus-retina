@@ -31,6 +31,9 @@ server = [
     "python-multipart>=0.0.9",
     "opencv-python-headless>=4.10",
     "numpy>=1.26",
+    # /health is argus_cortex.service.install_health (MIT, pydantic only), so every image installs cortex. The GPU
+    # images pin it exactly, with the extras their leases need (images/<model>/requirements.txt).
+    "argus-cortex>=0.16,<0.17",
 ]
 dev = [
     "argus-retina[server]",
@@ -39,9 +42,9 @@ dev = [
     "httpx>=0.27",
     "pyyaml>=6.0",
     "ruff==0.15.16",
-    # Tests check /health against cortex's ResidentHealth and the manifests against TenantManifest; GPU images'
-    # admin routes use argus_cortex.auth (0.8).
-    "argus-cortex[yaml]>=0.15,<0.16",
+    # Tests check /health against cortex's ServiceHealth and ResidentHealth, and the manifests against
+    # TenantManifest; GPU images' admin routes use argus_cortex.auth (0.8).
+    "argus-cortex[yaml]>=0.16,<0.17",
     # SingGuard's request images (argus_retina.guard). The synthetic preprocess uses it too.
     "pillow>=10",
     # The C2PA reader's own test against an unsigned file. The image pins the same version.

@@ -3,6 +3,8 @@
 #   docker compose up -d                      # the released images, including synthetic (:8136) and c2pa (:8137)
 #   docker compose build && docker compose up -d   # from source, after `make weights`
 #   docker compose --profile gpu up -d        # SingGuard and faces too (the GPU images)
+# Each container is labelled argus.peer (the name callers ask for: ARGUS_<PEER>_URL in argus_cortex.peers), which is
+# how argus-iris lists it in the suite's directory.
 
 services:
   nudenet:
@@ -11,6 +13,13 @@ services:
       context: .
       dockerfile: images/nudenet/Dockerfile
     restart: unless-stopped
+    labels:
+      argus.peer: nudenet
+      argus.service: argus-retina
+      argus.health: /health
+      argus.port: "8080"
+    environment:
+      - ARGUS_PEER=nudenet
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${NUDENET_PORT:-8130}:8080"
 
@@ -20,6 +29,13 @@ services:
       context: .
       dockerfile: images/erax/Dockerfile
     restart: unless-stopped
+    labels:
+      argus.peer: erax
+      argus.service: argus-retina
+      argus.health: /health
+      argus.port: "8080"
+    environment:
+      - ARGUS_PEER=erax
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${ERAX_PORT:-8131}:8080"
 
@@ -31,6 +47,13 @@ services:
       context: .
       dockerfile: images/watermark/Dockerfile
     restart: unless-stopped
+    labels:
+      argus.peer: watermark
+      argus.service: argus-retina
+      argus.health: /health
+      argus.port: "8080"
+    environment:
+      - ARGUS_PEER=watermark
     volumes:
       # Long form so a missing file is an error: the short form would create a root-owned directory at that path,
       # which then blocks `make watermark-weights`.
@@ -49,6 +72,13 @@ services:
       context: .
       dockerfile: images/ocr/Dockerfile
     restart: unless-stopped
+    labels:
+      argus.peer: ocr
+      argus.service: argus-retina
+      argus.health: /health
+      argus.port: "8080"
+    environment:
+      - ARGUS_PEER=ocr
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${OCR_PORT:-8133}:8080"
 
@@ -62,7 +92,13 @@ services:
       dockerfile: images/singguard/Dockerfile
     profiles: ["gpu"]
     restart: unless-stopped
+    labels:
+      argus.peer: singguard
+      argus.service: argus-retina
+      argus.health: /health
+      argus.port: "8080"
     environment:
+      - ARGUS_PEER=singguard
       - SINGGUARD_QUANT=${SINGGUARD_QUANT:-4bit}
       - SINGGUARD_FORCE_THINKING=${SINGGUARD_FORCE_THINKING:-}
       - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
@@ -77,6 +113,11 @@ services:
       - ARGUS_GPU_LEASE_PATH=/run/argus-gpu/argus-gpu.lock
       - ARGUS_GPU_LEASE_TIMEOUT_S=${ARGUS_GPU_LEASE_TIMEOUT_S:-300}
     volumes:
+      # The suite file (argus_cortex.settings): the broker URL and token and ARGUS_ADMIN_TOKEN, written once for the
+      # host instead of in each repo's .env. Compose has no optional bind mount, so uncomment this where the file
+      # exists. The image runs as a non-root user, so mount a root-owned, mode 444 copy (cortex reads no other file
+      # it doesn't own); a mode 600 file from your home is unreadable in here. A value set above still wins.
+      # - /etc/argus/suite.env:/etc/argus/suite.env:ro
       - singguard_weights:/models/singguard
       # The host lock every argus GPU service shares, for when the broker can't be reached.
       - ${ARGUS_GPU_LOCK_DIR:-/tmp/argus-gpu}:/run/argus-gpu
@@ -93,7 +134,13 @@ services:
       dockerfile: images/faces/Dockerfile
     profiles: ["gpu"]
     restart: unless-stopped
+    labels:
+      argus.peer: faces
+      argus.service: argus-retina
+      argus.health: /health
+      argus.port: "8080"
     environment:
+      - ARGUS_PEER=faces
       - FACES_DET_THRESH=${FACES_DET_THRESH:-0.5}
       - FACES_GPU_MEM_LIMIT_MB=${FACES_GPU_MEM_LIMIT_MB:-1024}
       - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
@@ -104,6 +151,8 @@ services:
       - ARGUS_GPU_LEASE_PATH=/run/argus-gpu/argus-gpu.lock
       - ARGUS_GPU_LEASE_TIMEOUT_S=${ARGUS_GPU_LEASE_TIMEOUT_S:-300}
     volumes:
+      # The suite file, as for singguard above (uncomment where it exists).
+      # - /etc/argus/suite.env:/etc/argus/suite.env:ro
       - type: bind
         source: ${INSIGHTFACE_ROOT:-./images/faces/weights/insightface}
         target: /models/insightface
@@ -128,6 +177,13 @@ services:
       context: .
       dockerfile: images/synthetic/Dockerfile
     restart: unless-stopped
+    labels:
+      argus.peer: synthetic
+      argus.service: argus-retina
+      argus.health: /health
+      argus.port: "8080"
+    environment:
+      - ARGUS_PEER=synthetic
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${SYNTHETIC_PORT:-8136}:8080"
 
@@ -138,6 +194,13 @@ services:
       context: .
       dockerfile: images/c2pa/Dockerfile
     restart: unless-stopped
+    labels:
+      argus.peer: c2pa
+      argus.service: argus-retina
+      argus.health: /health
+      argus.port: "8080"
+    environment:
+      - ARGUS_PEER=c2pa
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${C2PA_PORT:-8137}:8080"
 

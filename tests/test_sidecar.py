@@ -8,12 +8,14 @@ import sys
 import textwrap
 import threading
 import time
+from unittest.mock import ANY
 
 import cv2
 import numpy as np
 import pytest
 from argus_cortex.gpu_wire import ResidentActionReply, ResidentBusyReply, ResidentHealth
 from argus_cortex.moderation.nudenet import NudeNetInfo
+from argus_cortex.service import ServiceHealth
 from fastapi.testclient import TestClient
 
 import argus_retina
@@ -146,6 +148,58 @@ def test_health_is_cortex_resident_health_and_names_the_model(monkeypatch):
     assert body["commit"] == "abc123" and body["version"] == argus_retina.__version__  # AGPL section 13
     # what argus_cortex's NudeNetClient.info() reads from it
     assert NudeNetInfo(model=body["model"], resolution=body["resolution"]).detector == "640m"
+
+
+def test_health_is_also_cortex_service_health_and_keeps_every_field_it_had(monkeypatch):
+    monkeypatch.setenv("ARGUS_RETINA_COMMIT", "abc123")
+    monkeypatch.setenv("ARGUS_PEER", "nudenet")  # compose repeats the container's argus.peer label
+    c, r = client(fake_loader([]))
+    r.load()
+    resp = c.get("/health")
+    body = resp.json()
+    h = ServiceHealth.model_validate(body)
+    assert (h.service, h.version, h.status) == ("argus-retina", argus_retina.__version__, "ok")
+    assert (h.build, h.peer, h.wire) == ("abc123", "nudenet", {"resident_version": "1.0"})
+    assert h.checks["model"].ok and h.checks["model"].required
+    # Everything Resident.health() answered before is still there, unchanged.
+    assert {k: body[k] for k in r.health() if k != "idle_s"} == {k: v for k, v in r.health().items() if k != "idle_s"}
+    assert set(r.health()) == {
+        "resident_version", "model_state", "busy", "idle_s", "detector", "device", "model", "resolution", "version",
+        "commit",
+    }  # fmt: skip
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_health_answers_200_while_the_model_loads_and_says_degraded():
+    # argus-iris's resident adapter and NudeNetClient.info() read the body while the model loads: never a 503.
+    c, r = client(fake_loader([]))
+    r.state = "loading"
+    resp = c.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert (body["status"], body["model_state"]) == ("degraded", "loading")
+    assert body["checks"]["model"] == {"ok": False, "detail": "loading", "latency_ms": ANY, "required": True}
+    # The check is not cached: status follows the model at once.
+    r.state = "unloaded"
+    r.load()
+    assert c.get("/health").json()["status"] == "ok"
+    # ?checks=0 runs none (cortex's cheap probe); model_state still says what the model is doing.
+    r.state = "loading"
+    shallow = c.get("/health?checks=0")
+    assert shallow.status_code == 200 and shallow.json()["checks"] == {} and shallow.json()["model_state"] == "loading"
+
+
+def test_an_unloaded_gpu_model_is_ok_and_a_failed_one_degraded():
+    r = Resident("SingGuard", lambda: object(), {"model": "stand-in"}, device="gpu")
+    c = TestClient(create_app(r, load=False, infer=False))
+    body = c.get("/health").json()  # unloaded: the next request loads it
+    assert (body["status"], body["model_state"]) == ("ok", "unloaded")
+    r.state, r.error = "error", "OutOfMemoryError: CUDA out of memory"
+    resp = c.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert (body["status"], body["checks"]["model"]["detail"]) == ("degraded", "error")
+    assert "out of memory" in body["error"] and ResidentHealth.model_validate(body).model_state == "error"
 
 
 def test_a_model_that_fails_to_load_says_so():
