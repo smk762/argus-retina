@@ -2,5 +2,13 @@
 # insightface may pull the CPU onnxruntime wheel; the Dockerfile removes it and keeps onnxruntime-gpu.
 insightface==0.7.3
 onnxruntime-gpu==1.20.2
+# onnxruntime-gpu 1.20 links CUDA 12 and cuDNN 9 but does not install them, and python:3.12-slim has neither. These
+# are NVIDIA's wheels (the set torch 2.5.1 pins); the Dockerfile puts their lib/ directories on LD_LIBRARY_PATH.
+nvidia-cuda-runtime-cu12==12.4.127
+nvidia-cuda-nvrtc-cu12==12.4.127
+nvidia-cublas-cu12==12.4.5.8
+nvidia-cufft-cu12==11.2.1.3
+nvidia-curand-cu12==10.3.5.147
+nvidia-cudnn-cu12==9.1.0.70
 # Admin bearer check, GPU leases, and the tenant manifest (0.15: registered with the broker at startup).
 argus-cortex[remote,gpu,yaml]==0.15.0

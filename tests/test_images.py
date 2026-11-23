@@ -204,6 +204,11 @@ def test_the_faces_image_bakes_in_no_weights_and_runs_on_the_gpu():
     assert "ARGUS_RETINA_COMMIT=${COMMIT}" in text and "USER retina" in text
     assert "CUDA_VISIBLE_DEVICES=" not in text
     assert "onnxruntime-gpu==1.20.2" in text
+    # ORT 1.20 links CUDA 12 and cuDNN 9 without installing them: the image ships NVIDIA's wheels and their lib/ dirs
+    reqs = (ROOT / "images" / "faces" / "requirements.txt").read_text()
+    for lib in ("cuda_runtime", "cuda_nvrtc", "cublas", "cufft", "curand", "cudnn"):
+        assert re.search(rf"nvidia-{lib.replace('_', '-')}-cu12==[\d.]+", reqs)
+        assert f"site-packages/nvidia/{lib}/lib" in text
     assert "images/faces/weights" in (ROOT / ".dockerignore").read_text()
 
 
