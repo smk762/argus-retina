@@ -41,6 +41,7 @@ ENV PYTHONUNBUFFERED=1 \
     MIVOLO_MODEL=/models/faces/mivolo_v2_d1_384.onnx \
     FACES_DET_THRESH=0.5 \
     FACES_GPU_MEM_LIMIT_MB=1024 \
+    LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cufft/lib:/usr/local/lib/python3.12/site-packages/nvidia/curand/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib \
     ARGUS_RETINA_COMMIT=${COMMIT}
 LABEL org.opencontainers.image.title="argus-retina-faces" \
       org.opencontainers.image.description="InsightFace buffalo_l and MiVOLO behind POST /faces, /health and /admin (GPU; weights mounted)" \
