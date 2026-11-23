@@ -1,8 +1,8 @@
 # argus-retina's detectors, published on loopback only. To serve the LAN, set RETINA_BIND=0.0.0.0 in .env
 # (the servers have no auth: keep them on a trusted network).
-#   docker compose up -d                      # the released images
+#   docker compose up -d                      # the released images, including synthetic (:8136) and c2pa (:8137)
 #   docker compose build && docker compose up -d   # from source, after `make weights`
-#   docker compose --profile gpu up -d        # SingGuard too (the one GPU image)
+#   docker compose --profile gpu up -d        # SingGuard and faces too (the GPU images)
 
 services:
   nudenet:
@@ -67,8 +67,10 @@ services:
       - SINGGUARD_FORCE_THINKING=${SINGGUARD_FORCE_THINKING:-}
       - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
       # GPU leases (argus_cortex.gpu): the host's settings, as the suite's other GPU stages take them. Unset is none.
-      # broker asks argus-iris (ARGUS_GPU_BROKER_URL and _TOKEN), falling back to a host lock at ARGUS_GPU_LEASE_PATH.
-      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-none}
+      # ARGUS_GPU_BROKER_URL and _TOKEN alone ask argus-iris, falling back to a host lock at ARGUS_GPU_LEASE_PATH, and
+      # register images/singguard/gpu-tenant.yaml at startup (container: singguard, this service). For the broker to
+      # reach it, publish it on an address the broker can reach (RETINA_BIND).
+      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-}
       - ARGUS_GPU_BROKER_URL=${ARGUS_GPU_BROKER_URL:-}
       - ARGUS_GPU_BROKER_TOKEN=${ARGUS_GPU_BROKER_TOKEN:-}
       - ARGUS_GPU_BROKER_FALLBACK=${ARGUS_GPU_BROKER_FALLBACK:-lease}
@@ -81,6 +83,63 @@ services:
     gpus: all
     ports:
       - "${RETINA_BIND:-127.0.0.1}:${SINGGUARD_PORT:-8134}:8080"
+
+  faces:
+    # GPU, started with `docker compose --profile gpu`. No weights in the image: mount buffalo_l and the MiVOLO ONNX.
+    # ONNX Runtime keeps its CUDA arena after /admin/unload, so iris should stop this container to free the card.
+    image: ghcr.io/smk762/argus-retina-faces:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/faces/Dockerfile
+    profiles: ["gpu"]
+    restart: unless-stopped
+    environment:
+      - FACES_DET_THRESH=${FACES_DET_THRESH:-0.5}
+      - FACES_GPU_MEM_LIMIT_MB=${FACES_GPU_MEM_LIMIT_MB:-1024}
+      - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
+      - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-}
+      - ARGUS_GPU_BROKER_URL=${ARGUS_GPU_BROKER_URL:-}
+      - ARGUS_GPU_BROKER_TOKEN=${ARGUS_GPU_BROKER_TOKEN:-}
+      - ARGUS_GPU_BROKER_FALLBACK=${ARGUS_GPU_BROKER_FALLBACK:-lease}
+      - ARGUS_GPU_LEASE_PATH=/run/argus-gpu/argus-gpu.lock
+      - ARGUS_GPU_LEASE_TIMEOUT_S=${ARGUS_GPU_LEASE_TIMEOUT_S:-300}
+    volumes:
+      - type: bind
+        source: ${INSIGHTFACE_ROOT:-./images/faces/weights/insightface}
+        target: /models/insightface
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MIVOLO_MODEL:-./images/faces/weights/mivolo_v2_d1_384.onnx}
+        target: /models/faces/mivolo_v2_d1_384.onnx
+        read_only: true
+        bind:
+          create_host_path: false
+      - ${ARGUS_GPU_LOCK_DIR:-/tmp/argus-gpu}:/run/argus-gpu
+    gpus: all
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${FACES_PORT:-8135}:8080"
+
+  synthetic:
+    # Community Forensics weights are MIT and small, so they are baked in (pinned by Hub commit and sha256).
+    image: ghcr.io/smk762/argus-retina-synthetic:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/synthetic/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${SYNTHETIC_PORT:-8136}:8080"
+
+  c2pa:
+    # No model. Reads a C2PA manifest in the file, if there is one.
+    image: ghcr.io/smk762/argus-retina-c2pa:${RETINA_TAG:-latest}
+    build:
+      context: .
+      dockerfile: images/c2pa/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${RETINA_BIND:-127.0.0.1}:${C2PA_PORT:-8137}:8080"
 
 volumes:
   singguard_weights:

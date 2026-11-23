@@ -228,19 +228,36 @@ class Resident:
     def run(self, work: Callable[[Any], Any]) -> Any:
         """``work(model)``, one call at a time. A GPU model unloaded by an admin loads again first.
 
-        Raises ``NotReady`` while the model is loading or failed to load. A GPU model that failed to load tries again
-        on each request (a lease or out-of-memory failure passes once argus-iris makes room); a CPU one does not.
+        Raises ``NotReady`` while the model is loading or failed to load, or when a GPU lease can't be had. A refused
+        lease keeps its reason, and a model that is not loaded stays ``unloaded``, so ``/health`` says why. A GPU model
+        that failed to load tries again on each request (a lease or out-of-memory failure passes once argus-iris makes
+        room); a CPU one does not.
         """
         with self._busy_lock:
             self._busy += 1
         try:
-            with self._lock, self._leased():
-                if self._model is None and self.device == "gpu" and self.state in ("unloaded", "error"):
-                    self.load()
-                model = self._model
-                if model is None:
-                    raise NotReady(f"{self.name} is {self.state}")
-                return work(model)
+            with self._lock:
+                entered = False
+                try:
+                    with self._leased():
+                        entered = True
+                        if self._model is None and self.device == "gpu" and self.state in ("unloaded", "error"):
+                            self.load()
+                        model = self._model
+                        if model is None:
+                            raise NotReady(f"{self.name} is {self.state}")
+                        # The lease was had, so a reason kept from an earlier refusal no longer applies.
+                        self.error = ""
+                        return work(model)
+                except NotReady as exc:
+                    # ``_leased`` refused before the body ran. A NotReady from the body (the model isn't there) keeps
+                    # the state the load recorded; a startup load already in progress is left alone.
+                    if not entered and self.state != "loading":
+                        self.log.warning("%s", exc)
+                        self.error = str(exc)[:500]
+                        if self._model is None and self.state != "error":
+                            self.state = "unloaded"
+                    raise
         finally:
             with self._busy_lock:
                 self._busy -= 1
@@ -264,8 +281,14 @@ class Resident:
     def unload(self) -> bool:
         """Drop the model and free what it held. True when something was freed, False when it was already unloaded.
 
-        Raises ``Busy`` while work runs or waits, and ``NotReady`` while the model is loading.
+        A CPU image never unloads: the call returns False and the model stays, so the next request is still served.
+        Raises ``Busy`` while work runs or waits, and ``NotReady`` while a GPU model is loading.
+
+        The state is ``unloaded`` before ``release`` runs. A failure there (``torch.cuda.empty_cache``) is logged; the
+        model stays dropped, and the next request loads it again.
         """
+        if self.device == "cpu":
+            return False
         if not self._load_lock.acquire(blocking=False):
             raise NotReady(f"{self.name} is loading")
         try:
@@ -275,9 +298,12 @@ class Resident:
                 if self._busy:  # a request waiting for the lock counts: it was accepted
                     raise Busy(self._busy)
                 freed, self._model = self._model is not None, None
-                if freed and self._release is not None:
-                    self._release()
                 self.state, self.error = "unloaded", ""
+                if freed and self._release is not None:
+                    try:
+                        self._release()
+                    except Exception:
+                        self.log.exception("%s release failed", self.name)
             finally:
                 self._lock.release()
         finally:
@@ -335,18 +361,46 @@ class Resident:
         return {"resident_version": "1.0", "status": "ok", "model_state": self.state, "unloaded": unloaded}
 
 
-def create_app(resident: Resident, *, load: bool = True, infer: bool = True) -> FastAPI:
+def coordinator_or_none(build: Callable[[], Any], log: logging.Logger) -> Any:
+    """*build()*, the host's GPU coordinator, or None (logged) when the settings can't make one."""
+    try:
+        return build()
+    except Exception:  # noqa: BLE001 - a bad setting must not stop the server; the first lease reports it too
+        log.warning("no GPU coordinator from the ARGUS_GPU_* settings", exc_info=True)
+        return None
+
+
+def create_app(
+    resident: Resident,
+    *,
+    load: bool = True,
+    infer: bool = True,
+    coordinator: Callable[[], Any] | None = None,
+) -> FastAPI:
     """The FastAPI app around *resident*. ``load=False`` leaves loading to the caller (tests).
 
     ``infer=False`` leaves out ``POST /infer``, for an image that serves its own route (SingGuard). A GPU resident
     also gets the admin routes.
+
+    *coordinator* returns the GPU coordinator the image leases from (``argus_cortex.gpu``). The app keeps the image's
+    tenant registered with argus-iris while it serves (``gpu.aregistered``: at startup, again every few minutes, and
+    signed off at shutdown), so the broker knows the resident before the first request and gets the admin token for
+    ``/admin/*``. Nothing happens unless that coordinator is the broker (``ARGUS_GPU_BROKER_URL``), and a broker
+    that is down never delays startup.
     """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         if load:
             resident.start()
-        yield
+        gpu = coordinator_or_none(coordinator, resident.log) if coordinator is not None else None
+        if gpu is None:
+            yield
+            return
+        from argus_cortex.gpu import aregistered  # noqa: PLC0415 - GPU images install argus-cortex
+
+        async with aregistered(gpu):
+            yield
 
     app = FastAPI(title=f"argus-retina {resident.name}", version=argus_retina.__version__, lifespan=lifespan)
 

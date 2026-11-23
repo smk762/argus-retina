@@ -12,7 +12,7 @@ from argus_cortex.gpu_wire import load_tenant_manifest
 from argus_retina.yolo import boxes
 
 ROOT = Path(__file__).parent.parent
-IMAGES = ["nudenet", "erax", "watermark", "ocr"]
+IMAGES = ["nudenet", "erax", "watermark", "ocr", "synthetic", "c2pa"]
 NUDENET_640M_SHA256 = "04fe3d77980780c1f8297dc6d7f942fd5b3abe6942a188f742a85241e4f634eb"
 
 
@@ -115,6 +115,23 @@ def test_the_watermark_weights_for_a_local_mount_are_pinned_to_a_space_commit_an
     assert re.search(r"WATERMARK_SHA256 := [0-9a-f]{64}", make)
 
 
+def test_synthetic_weights_are_pinned_to_the_same_hub_commit_and_checksum_as_the_module():
+    from argus_retina.synthetic import REVISION, SHA256
+
+    text = (ROOT / "images" / "synthetic" / "Dockerfile").read_text()
+    assert f"commfor-model-384/resolve/{REVISION}/model.safetensors" in text
+    assert f"SYNTHETIC_SHA256={SHA256}" in text
+    assert "sha256sum -c -" in text
+
+
+def test_the_c2pa_image_bakes_in_no_weights_and_pins_the_reader():
+    text = (ROOT / "images" / "c2pa" / "Dockerfile").read_text()
+    assert fetched_weights(text) == []
+    pin = "c2pa-python==0.39.0"
+    assert pin in (ROOT / "images" / "c2pa" / "requirements.txt").read_text()
+    assert pin in (ROOT / "pyproject.toml").read_text()
+
+
 def test_ocr_models_are_pinned_to_a_release_and_checksums():
     text = (ROOT / "images" / "ocr" / "Dockerfile").read_text()
     assert "RapidOCR/resolve/v3.10.0/onnx" in text
@@ -154,6 +171,40 @@ def test_singguard_is_a_gpu_tenant_with_an_unload_and_wake_resident():
     assert res.adapter == "argus-http" and res.admin_auth
     assert (res.health_path, res.unload_path, res.warm_path) == ("/health", "/admin/unload", "/admin/wake")
     assert res.evict_path is None  # no CPU stage: argus-iris unloads instead
+    # The broker places a registered resident by its container (compose.yaml's service), never a host it names.
+    assert (res.container, res.base_url) == ("singguard", None)
+
+
+def test_faces_is_an_evictable_gpu_tenant_at_the_measured_footprint():
+    m = load_tenant_manifest(ROOT / "images" / "faces" / "gpu-tenant.yaml")
+    assert m.tenant == "argus-retina-faces" and m.repo == "smk762/argus-retina"
+    (kind,) = m.kinds
+    (res,) = m.residents
+    assert kind.kind == "faces" and kind.vram_mb == 1600 and kind.model_mb == res.vram_mb == 1000
+    assert res.pinned is False and res.idle_kill_s == 600
+    assert res.adapter == "argus-http" and res.admin_auth
+    assert (res.health_path, res.unload_path, res.warm_path) == ("/health", "/admin/unload", "/admin/wake")
+    assert res.evict_path is None  # no CPU stage, and the CUDA arena only goes when the container stops
+    assert (res.container, res.base_url) == ("faces", None)
+
+
+@pytest.mark.parametrize("image", ["singguard", "faces"])
+def test_a_gpu_image_ships_its_manifest_where_cortex_finds_it(image):
+    """argus-cortex 0.15 reads /app/gpu-tenant.yaml with no ARGUS_GPU_TENANT_MANIFEST, and registers at startup."""
+    text = (ROOT / "images" / image / "Dockerfile").read_text()
+    assert f"COPY images/{image}/gpu-tenant.yaml /app/gpu-tenant.yaml" in text
+    assert "argus-cortex[remote,gpu,yaml]==0.15." in (ROOT / "images" / image / "requirements.txt").read_text()
+
+
+def test_the_faces_image_bakes_in_no_weights_and_runs_on_the_gpu():
+    # buffalo_l is not redistributable; MiVOLO's ONNX is mounted from curator's converter.
+    text = (ROOT / "images" / "faces" / "Dockerfile").read_text()
+    assert fetched_weights(text) == []
+    assert "argus_retina.faces:app" in text and "VOLUME /models/insightface" in text
+    assert "ARGUS_RETINA_COMMIT=${COMMIT}" in text and "USER retina" in text
+    assert "CUDA_VISIBLE_DEVICES=" not in text
+    assert "onnxruntime-gpu==1.20.2" in text
+    assert "images/faces/weights" in (ROOT / ".dockerignore").read_text()
 
 
 def test_the_singguard_image_bakes_in_no_weights_and_runs_its_module():

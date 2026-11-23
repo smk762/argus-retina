@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 import argus_retina
 from argus_retina import sidecar
-from argus_retina.sidecar import Resident, UnreadableImage, create_app, decode_bgr
+from argus_retina.sidecar import NotReady, Resident, UnreadableImage, create_app, decode_bgr
 
 
 def png(gray: bool = False) -> bytes:
@@ -215,15 +215,36 @@ def test_the_app_loads_its_model_at_startup():
 
 
 @pytest.mark.parametrize(
-    "module", ["argus_retina.nudenet", "argus_retina.erax", "argus_retina.watermark", "argus_retina.ocr"]
+    "module",
+    [
+        "argus_retina.nudenet",
+        "argus_retina.erax",
+        "argus_retina.watermark",
+        "argus_retina.ocr",
+        "argus_retina.synthetic",
+        "argus_retina.c2pa",
+        "argus_retina.faces",
+    ],
 )
 def test_the_image_modules_import_without_their_detector(module, monkeypatch, tmp_path):
-    # nudenet / ultralytics are only in their images: importing the module must not need them
+    # nudenet / ultralytics / insightface are only in their images: importing the module must not need them
     import importlib
 
     mod = importlib.import_module(module)
     assert mod.resident.state == "unloaded"
-    monkeypatch.setattr(mod, "DET" if module.endswith(".ocr") else "MODEL", tmp_path / "missing.onnx")
+    if module.endswith(".ocr"):
+        monkeypatch.setattr(mod, "DET", tmp_path / "missing.onnx")
+    elif module.endswith(".faces"):
+        monkeypatch.setattr(mod, "ROOT", tmp_path)
+        monkeypatch.setattr(mod, "MIVOLO", tmp_path / "missing.onnx")
+    elif module.endswith(".c2pa"):
+        try:
+            mod.load()
+        except ImportError:
+            return  # the reader is not installed here; importing the module did not need it
+        return
+    else:
+        monkeypatch.setattr(mod, "MODEL", tmp_path / "missing.onnx")
     with pytest.raises(FileNotFoundError):
         mod.load()
 
@@ -247,6 +268,16 @@ def test_a_cpu_image_has_no_admin_routes():
     c, r = client(fake_loader([]))
     r.load()
     assert c.post("/admin/unload").status_code == 404
+
+
+def test_unloading_a_cpu_resident_leaves_it_servable():
+    # CPU images never unload. Doing it anyway used to drop the model and leave every request 503, because only a
+    # GPU resident loads again.
+    c, r = client(fake_loader([]))
+    r.load()
+    assert r.unload() is False
+    assert r.state == "cpu" and r._model is not None and r.ready
+    assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 200
 
 
 def test_a_gpu_resident_reports_gpu_and_its_memory():
@@ -273,6 +304,28 @@ def test_unload_frees_the_model_and_wake_loads_it_again():
     woke = ResidentActionReply.model_validate(c.post("/admin/wake").json())
     assert woke.model_state == "gpu" and woke.unloaded is None and loads == [1, 1]
     assert c.post("/admin/wake").status_code == 200 and loads == [1, 1]  # already loaded: nothing to do
+
+
+def test_a_release_failure_still_leaves_the_model_unloaded(caplog):
+    # release runs after the model is dropped (gc, empty_cache). It used to run before the state flipped, so a CUDA
+    # error left no model but state "gpu": ready, and every later request 503 until restart.
+    def boom():
+        raise RuntimeError("empty_cache failed")
+
+    loads = []
+
+    def load():
+        loads.append(1)
+        return lambda images: [[] for _ in images]
+
+    r = Resident("Guard", load, {"model": "m"}, device="gpu", release=boom)
+    r.load()
+    with caplog.at_level("ERROR"):
+        assert r.unload() is True
+    assert r._model is None and r.state == "unloaded" and r.ready
+    assert "empty_cache failed" in caplog.text
+    assert r.detect([b"x"]) == [[]]
+    assert loads == [1, 1] and r.state == "gpu"
 
 
 def test_an_unloaded_gpu_model_loads_on_the_next_request():
@@ -452,6 +505,29 @@ def test_a_refused_lease_is_a_503_and_leaves_the_model_unloaded():
     assert r.health()["busy"] is False
 
 
+def test_a_refused_lease_during_a_request_keeps_the_reason():
+    # load_leased records a refused lease. A request's lease used to raise NotReady without touching self.error, so
+    # /health never said why an on-demand load was being refused.
+    leases, loads = Leases(), []
+    _, r = leased_client(leases, loads)
+    r.load_leased()
+    r.unload()
+    leases.refuse = TimeoutError("broker queue full")
+    with pytest.raises(NotReady, match="broker queue full"):
+        r.detect([b"x"])
+    assert r.state == "unloaded" and r._model is None and loads == [1]
+    assert "broker queue full" in r.error and "broker queue full" in r.health()["error"]
+    leases.refuse = None
+    assert r.detect([b"x"]) == [[]] and loads == [1, 1] and r.state == "gpu" and r.error == ""
+
+    leases.refuse = TimeoutError("broker queue full")
+    with pytest.raises(NotReady, match="broker queue full"):
+        r.detect([b"x"])
+    assert r.state == "gpu" and r._model is not None and "broker queue full" in r.health()["error"]
+    leases.refuse = None
+    assert r.detect([b"x"]) == [[]] and r.state == "gpu" and r.error == ""
+
+
 def test_a_refused_startup_lease_loads_on_the_next_request():
     leases, loads = Leases(refuse=TimeoutError("broker queue full")), []
     c, r = leased_client(leases, loads)
@@ -511,3 +587,70 @@ def test_infer_on_a_cpu_resident_that_failed_to_load_stays_a_503():
     c = TestClient(create_app(r, load=False))
     r.load()
     assert c.post("/infer", files=[("f1", ("a.png", png(), "image/png"))]).status_code == 503
+
+
+# ── argus-iris registration (argus-cortex 0.15) ─────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def broker(monkeypatch):
+    """An in-memory broker the GPU coordinator talks to; the requests it saw."""
+    httpx = pytest.importorskip("httpx")
+    from argus_cortex import gpu
+
+    seen: list = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200 if request.method == "POST" else 204, json={})
+
+    def coordinator():
+        built = gpu.coordinator_from_env()
+        if built.name == "broker":
+            built._async_transport = httpx.MockTransport(handler)
+        return built
+
+    for name in ("ARGUS_GPU_COORDINATOR", "ARGUS_GPU_TENANT", "ARGUS_GPU_BROKER_URL"):
+        monkeypatch.delenv(name, raising=False)
+    manifest = os.path.join(os.path.dirname(__file__), "..", "images", "singguard", "gpu-tenant.yaml")
+    monkeypatch.setenv("ARGUS_GPU_TENANT_MANIFEST", manifest)
+    return seen, coordinator
+
+
+def _gpu_app(coordinator) -> TestClient:
+    r = Resident("SingGuard", lambda: object(), {"model": "stand-in"}, device="gpu")
+    return TestClient(create_app(r, load=False, infer=False, coordinator=coordinator))
+
+
+def test_a_gpu_image_registers_at_startup_and_signs_off(broker, monkeypatch):
+    seen, coordinator = broker
+    monkeypatch.setenv("ARGUS_GPU_BROKER_URL", "http://broker.invalid:8120")
+    monkeypatch.setenv("ARGUS_GPU_BROKER_TOKEN", "caller-secret")
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", "admin-secret")
+    with _gpu_app(coordinator):
+        end = time.monotonic() + 5
+        while not seen and time.monotonic() < end:
+            time.sleep(0.01)
+        assert seen, "no registration at startup"
+        post = seen[0]
+        assert (post.method, post.url.path) == ("POST", "/tenants")
+        assert post.headers["authorization"] == "Bearer caller-secret"
+        assert post.headers["x-argus-admin-token"] == "admin-secret"  # the resident has admin_auth
+        assert b'"argus-retina-singguard"' in post.content
+    assert (seen[-1].method, seen[-1].url.path) == ("DELETE", "/tenants/argus-retina-singguard")
+
+
+def test_without_a_broker_url_nothing_registers(broker):
+    seen, coordinator = broker
+    with _gpu_app(coordinator) as c:
+        assert c.get("/health").status_code == 200
+        time.sleep(0.05)
+    assert seen == []
+
+
+def test_a_coordinator_that_cannot_be_built_does_not_stop_the_server():
+    def broken():
+        raise ValueError("ARGUS_GPU_COORDINATOR='nonsense'")
+
+    with _gpu_app(broken) as c:
+        assert c.get("/health").status_code == 200

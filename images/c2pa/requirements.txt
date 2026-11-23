@@ -1,0 +1,2 @@
+# The reader. No weights: a manifest is either in the file or it is not.
+c2pa-python==0.39.0
