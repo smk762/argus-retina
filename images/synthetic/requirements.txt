@@ -1,0 +1,4 @@
+# torch and torchvision come from the CPU index first; see the Dockerfile. timm must not replace them.
+timm==1.0.31
+safetensors==0.8.0
+pillow==13.0.0

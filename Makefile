@@ -2,7 +2,7 @@ UV ?= uv
 
 .PHONY: help install lint format test build clean weights watermark-weights images
 
-IMAGES ?= nudenet erax watermark ocr singguard faces
+IMAGES ?= nudenet erax watermark ocr synthetic c2pa singguard faces
 NUDENET_640M_SHA256 := 04fe3d77980780c1f8297dc6d7f942fd5b3abe6942a188f742a85241e4f634eb
 NUDENET_640M := images/nudenet/weights/640m.onnx
 # fancyfeast's YOLO11x watermark detector. No stated licence: fetched for a local mount, never baked into an image.

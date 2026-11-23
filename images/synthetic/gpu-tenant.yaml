@@ -1,0 +1,16 @@
+# argus-iris tenant manifest for argus-retina-synthetic. Validated by argus-cortex's TenantManifest
+# (gpu-tenant-schema.json) in tests/test_images.py.
+#
+# Community Forensics runs torch on the CPU (CUDA_VISIBLE_DEVICES is empty): it never takes a lease or holds VRAM.
+# It keeps no GPU resident.
+tenant_version: "1.0"
+tenant: argus-retina-synthetic
+description: Community Forensics ViT-S/16 synthetic-image score on the CPU. A probability; the caller applies any cutoff.
+repo: smk762/argus-retina
+kinds:
+  - kind: synthetic
+    vram_mb: 0
+    priority: interactive
+    preemptible: false
+    description: One /synthetic call (one or more images), on the CPU.
+residents: []

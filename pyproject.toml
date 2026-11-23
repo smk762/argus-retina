@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "argus-retina"
 dynamic = ["version"]
-description = "Shared detector servers for the Argus suite: NudeNet, EraX, watermark and guard models behind one HTTP contract"
+description = "Shared detector servers for the Argus suite: NudeNet, EraX, watermark, OCR, guards, faces, synthetic scores and C2PA manifests behind one HTTP contract"
 readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.11"
@@ -42,8 +42,10 @@ dev = [
     # Tests check /health against cortex's ResidentHealth and the manifests against TenantManifest; GPU images'
     # admin routes use argus_cortex.auth (0.8).
     "argus-cortex[yaml]>=0.8",
-    # SingGuard's request images (argus_retina.guard).
+    # SingGuard's request images (argus_retina.guard). The synthetic preprocess uses it too.
     "pillow>=10",
+    # The C2PA reader's own test against an unsigned file. The image pins the same version.
+    "c2pa-python==0.39.0",
 ]
 
 [project.urls]

@@ -3,8 +3,8 @@
 _commit: 939debb
 _src_path: gh:smk762/argus-pkg-template
 author: smk762
-description: 'Shared detector servers for the Argus suite: NudeNet, EraX, watermark
-    and guard models behind one HTTP contract'
+description: 'Shared detector servers for the Argus suite: NudeNet, EraX, watermark,
+    OCR, guards, faces, synthetic scores and C2PA manifests behind one HTTP contract'
 dockerfile: Dockerfile
 github_owner: smk762
 has_cli: false
