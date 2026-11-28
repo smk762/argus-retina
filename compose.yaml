@@ -85,7 +85,8 @@ services:
   singguard:
     # The one GPU image, so it starts only with `docker compose --profile gpu up -d`. No weights in the image: the
     # first start fetches SingGuard-4b (8.9 GB) into the volume and checks every file's sha256; later starts reuse it.
-    # Set ARGUS_ADMIN_TOKEN so only argus-iris can unload it.
+    # Set ARGUS_ADMIN_TOKEN so argus-iris can unload it: without one /admin/* answers 503. ARGUS_ADMIN_INSECURE=1 opens
+    # them with no token, for local development only.
     image: ghcr.io/smk762/argus-retina-singguard:${RETINA_TAG:-latest}
     build:
       context: .
@@ -102,6 +103,7 @@ services:
       - SINGGUARD_QUANT=${SINGGUARD_QUANT:-4bit}
       - SINGGUARD_FORCE_THINKING=${SINGGUARD_FORCE_THINKING:-}
       - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
+      - ARGUS_ADMIN_INSECURE=${ARGUS_ADMIN_INSECURE:-}
       # GPU leases (argus_cortex.gpu): the host's settings, as the suite's other GPU stages take them. Unset is none.
       # ARGUS_GPU_BROKER_URL and _TOKEN alone ask argus-iris, falling back to a host lock at ARGUS_GPU_LEASE_PATH, and
       # register images/singguard/gpu-tenant.yaml at startup (container: singguard, this service). For the broker to
@@ -144,6 +146,7 @@ services:
       - FACES_DET_THRESH=${FACES_DET_THRESH:-0.5}
       - FACES_GPU_MEM_LIMIT_MB=${FACES_GPU_MEM_LIMIT_MB:-1024}
       - ARGUS_ADMIN_TOKEN=${ARGUS_ADMIN_TOKEN:-}
+      - ARGUS_ADMIN_INSECURE=${ARGUS_ADMIN_INSECURE:-}
       - ARGUS_GPU_COORDINATOR=${ARGUS_GPU_COORDINATOR:-}
       - ARGUS_GPU_BROKER_URL=${ARGUS_GPU_BROKER_URL:-}
       - ARGUS_GPU_BROKER_TOKEN=${ARGUS_GPU_BROKER_TOKEN:-}
