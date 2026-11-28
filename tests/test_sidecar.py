@@ -445,9 +445,32 @@ def test_admin_routes_while_loading_or_failed_are_503():
     assert resp.status_code == 503 and "out of memory" in resp.json()["detail"]
 
 
+def test_admin_routes_are_closed_without_a_token_unless_opened(monkeypatch):
+    c, r = gpu_client()
+    r.load()
+    monkeypatch.delenv("ARGUS_ADMIN_INSECURE")
+    for path in ("/admin/unload", "/admin/evict", "/admin/wake"):
+        resp = c.post(path)
+        assert resp.status_code == 503 and "ARGUS_ADMIN_TOKEN" in resp.json()["detail"]
+    assert r.state == "gpu"  # nothing was unloaded
+    monkeypatch.setenv("ARGUS_ADMIN_INSECURE", "0")
+    assert c.post("/admin/unload").status_code == 503
+    monkeypatch.setenv("ARGUS_ADMIN_INSECURE", "1")  # read per request: no restart
+    assert c.post("/admin/unload").status_code == 200
+
+
+def test_admin_insecure_does_not_waive_a_token_that_is_set(monkeypatch):
+    c, r = gpu_client()
+    r.load()
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", "s3cret")
+    assert c.post("/admin/unload").status_code == 401  # ARGUS_ADMIN_INSECURE=1 is set (the fixture)
+    assert c.post("/admin/unload", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
 def test_admin_routes_need_the_token_when_one_is_set(monkeypatch):
     c, r = gpu_client()
     r.load()
+    monkeypatch.delenv("ARGUS_ADMIN_INSECURE")
     monkeypatch.setenv("ARGUS_ADMIN_TOKEN", "s3cret")
     assert c.post("/admin/unload").status_code == 401
     assert c.post("/admin/unload", headers={"Authorization": "Bearer nope"}).status_code == 401

@@ -18,7 +18,8 @@ The model loads on a background thread at startup, so ``/health`` answers ``load
 
 An image that holds VRAM (``Resident(..., device="gpu")``) also serves argus-cortex's resident admin routes,
 ``POST /admin/unload``, ``/admin/evict`` and ``/admin/wake``, behind ``Authorization: Bearer $ARGUS_ADMIN_TOKEN``
-(open while the token is unset, as the suite's other residents are). They answer ``ResidentActionReply``, or 409
+(closed with a 503 while the token is unset, unless ``ARGUS_ADMIN_INSECURE=1`` opens them for local development, as
+argus-echo's engines do). They answer ``ResidentActionReply``, or 409
 ``ResidentBusyReply`` while work runs. After an unload the next request loads the model again.
 
 Moved from argus-cull's ``sidecar-common/sidecar.py`` (argus-cortex#88).
@@ -468,6 +469,11 @@ def create_app(
     return app
 
 
+def admin_insecure() -> bool:
+    """Whether ``ARGUS_ADMIN_INSECURE`` opens the admin routes while no ``ARGUS_ADMIN_TOKEN`` is set."""
+    return os.environ.get("ARGUS_ADMIN_INSECURE", "").strip().lower() in ("1", "true", "yes")
+
+
 def add_admin_routes(app: FastAPI, resident: Resident) -> None:
     """``/admin/unload``, ``/admin/evict`` and ``/admin/wake`` (argus-cortex's resident contract).
 
@@ -476,7 +482,15 @@ def add_admin_routes(app: FastAPI, resident: Resident) -> None:
     """
     from argus_cortex.auth import bearer  # noqa: PLC0415 - CPU images need no admin
 
-    admin = [Depends(bearer("ARGUS_ADMIN_TOKEN", open_when_unset=True))]
+    # Closed (503) while ARGUS_ADMIN_TOKEN is unset, unless ARGUS_ADMIN_INSECURE=1 opens them for local development:
+    # the rule argus-echo's engines follow. Both are read on every request, so neither needs a restart.
+    closed = bearer("ARGUS_ADMIN_TOKEN")
+    opened = bearer("ARGUS_ADMIN_TOKEN", open_when_unset=True)
+
+    async def require_admin(request: Request) -> None:
+        await (opened if admin_insecure() else closed)(request)
+
+    admin = [Depends(require_admin)]
 
     def act(action: Callable[[], bool | None]) -> Callable[[], Any]:
         async def route() -> Any:

@@ -13,6 +13,7 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 ### Changed
 
+- **The admin routes are closed without a token.** On SingGuard and faces, `/admin/unload`, `/admin/evict` and `/admin/wake` answered anyone while `ARGUS_ADMIN_TOKEN` was unset. They now answer `503` until a token is set, as argus-echo's engines do. `ARGUS_ADMIN_INSECURE=1` opens them without a token, for local development only; it does not waive a token that is set. Both are read on every request. **If you ran either image without `ARGUS_ADMIN_TOKEN`, argus-iris can no longer unload it until you set one** (compose passes both variables through).
 - **argus-cortex 0.16**: the GPU images pin `argus-cortex[remote,gpu,yaml]==0.16.0` (was 0.15.0) and the package `>=0.16,<0.17`. **The CPU images now install argus-cortex too** (through the `server` extra, no extras of its own: pydantic only), for the health route.
 
 ### Fixed
