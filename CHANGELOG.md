@@ -15,6 +15,10 @@ section here becomes its GitHub Release notes, and the release fails before push
 
 - **argus-cortex 0.16**: the GPU images pin `argus-cortex[remote,gpu,yaml]==0.16.0` (was 0.15.0) and the package `>=0.16,<0.17`. **The CPU images now install argus-cortex too** (through the `server` extra, no extras of its own: pydantic only), for the health route.
 
+### Fixed
+
+- **A refused startup lease no longer marks a loaded model `unloaded`.** When a request had its own lease and loaded the model while the startup load waited, the startup thread's refusal overwrote the state, so `/health` reported `model_state: unloaded` with a stale error for a resident model.
+
 ## [0.3.0] - 2026-11-23
 
 ### Added

@@ -591,6 +591,22 @@ def test_a_refused_startup_lease_loads_on_the_next_request():
     assert loads == [1] and r.state == "gpu" and r.error == ""
 
 
+def test_a_refused_startup_lease_never_marks_a_model_a_request_loaded_as_unloaded():
+    """The startup lease is refused after a request had its own lease and loaded the model: /health keeps reporting
+    the loaded model (audit pack-argus-retina-57fd785950)."""
+    loads: list[int] = []
+    r = Resident("Guard", lambda: loads.append(1) or (lambda images: [[] for _ in images]), {}, device="gpu")
+
+    def lease():
+        r.load()  # a request's load wins the race while the startup thread waits for its lease
+        raise TimeoutError("broker queue full")
+
+    r._lease = lease
+    r.load_leased()
+    assert loads == [1] and r._model is not None
+    assert r.state == "gpu" and r.error == "" and r.health()["model_state"] == "gpu"
+
+
 def test_a_gpu_load_that_failed_on_demand_tries_again_on_the_next_request():
     calls = []
 
