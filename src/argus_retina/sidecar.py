@@ -227,7 +227,12 @@ class Resident:
                 self.load()
         except NotReady as exc:
             self.log.warning("%s", exc)
-            self.state, self.error = "unloaded", str(exc)[:500]
+            # A request may have had its own lease and loaded the model meanwhile: a loaded model stays as it is.
+            with self._load_lock:
+                if self._model is None:
+                    self.error = str(exc)[:500]
+                    if self.state != "error":
+                        self.state = "unloaded"
 
     def start(self) -> threading.Thread:
         t = threading.Thread(target=self.load_leased, name=f"load-{self.name}", daemon=True)
